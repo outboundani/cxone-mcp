@@ -1,0 +1,14 @@
+{
+  "name": "nice-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for NiCE CXone on Cloudflare Workers - it builds, not just reads (skills, the outbound dialer, and real Studio IVRs composed from plain english)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "test": "node --test",
+    "smoke": "node scripts/live-smoke.mjs"
+  },
+  "license": "MIT"
+}

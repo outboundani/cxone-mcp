@@ -1,0 +1,19 @@
+name = "nice-mcp"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Configuration comes from one of two places (env wins if both are set):
+#   1. The in-browser setup wizard at /setup - stores config in the KV
+#      namespace below. Easiest path; no terminal needed after deploy.
+#   2. Wrangler secrets (`npx wrangler secret put <NAME>`):
+#      CXONE_ACCESS_KEY_ID / CXONE_ACCESS_KEY_SECRET / MCP_AUTH_TOKEN
+#      (CXONE_API_BASE is optional - the tenant's regional API host is
+#      discovered automatically from the access key)
+#
+# KV namespace for wizard-managed config. The `id` is intentionally omitted so
+# the namespace is auto-provisioned into the deploying account: the "Deploy to
+# Cloudflare" button and `npx wrangler deploy` both create it and write the id
+# back to this file on first deploy. (If you'd rather pin an existing namespace,
+# run `npx wrangler kv namespace create CONFIG` and add `id = "..."` below.)
+[[kv_namespaces]]
+binding = "CONFIG"

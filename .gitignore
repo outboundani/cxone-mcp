@@ -1,0 +1,6 @@
+.env
+node_modules/
+.dev.vars
+.wrangler/
+RECON.md
+specs-reference/
