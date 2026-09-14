@@ -90,8 +90,8 @@ export function landingPage(tools, cfg = { configured: true }) {
     <h1>Your CXone tenant,<br><span>in your AI's hands</span></h1>
     <p class="tag">An open-source MCP server that connects Claude, ChatGPT, or any MCP client to
     NiCE CXone, built to <strong>build</strong>: skills, agents, the outbound dialer config, and
-    real Studio IVRs - composed from plain english, diagrammed in chat, validated by CXone's own
-    syntax check on save.</p>
+    real Studio IVRs with nested submenus - composed from plain english, diagrammed in chat,
+    validated by CXone's own syntax check on save.</p>
     <div class="pills">
       <span class="pill">🛠️ ${tools.length} tools</span>
       <span class="pill">📦 zero dependencies</span>

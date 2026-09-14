@@ -55,6 +55,7 @@ await step('list_unavailable_codes', () => call('list_unavailable_codes'), (o) =
 await step('list_address_books', () => call('list_address_books'), (o) => 'total' in o);
 await step('list_dnc_groups', () => call('list_dnc_groups'), (o) => 'total' in o);
 await step('list_call_lists', () => call('list_call_lists'), (o) => 'total' in o);
+await step('outbound_overview', () => call('outbound_overview'), (o) => Array.isArray(o.outboundSkills) && Array.isArray(o.dncGroups));
 await step('list_scripts', () => call('list_scripts'), (o) => o.total >= 1);
 await step('get_script (json)', () => call('get_script', { script: 'test_inbound' }), (o) => o.format === 'json' && o.script.header);
 await step('get_script (xml fallback)', () => call('get_script', { script: 'FayServices_CallSuppression' }), (o) => o.format === 'xml' && o.xml.includes('ActionStruct'));
@@ -93,6 +94,27 @@ const spec = {
 };
 await step('build_ivr', () => call('build_ivr', { spec }), (o) => o.valid && o.mermaid.includes('|1|'));
 await step('build_ivr rejects bad spec', () => call('build_ivr', { spec: { name: '', menu: { prompt: '', choices: [] } } }), (o) => o.valid === false && o.errors.length);
+const nestedSpec = {
+  name: `MCP_Test_Nested_${stamp}`,
+  greeting: 'Thanks for calling outbound A N I.',
+  menu: {
+    prompt: 'Press 1 for sales, or 2 for billing options.',
+    choices: [
+      { digit: '1', action: 'transfer_to_skill', skill: 'Default Skill 4606137', pre_transfer_message: 'Connecting you now.' },
+      {
+        digit: '2', action: 'submenu', name: 'Billing',
+        menu: {
+          prompt: 'Press 1 to hear our billing hours, or 9 to go back.',
+          choices: [
+            { digit: '1', action: 'play_message', message: 'Billing is open weekdays, 9 to 5 eastern.' },
+            { digit: '9', action: 'previous_menu' },
+          ],
+        },
+      },
+    ],
+  },
+};
+await step('build_ivr (nested submenu)', () => call('build_ivr', { spec: nestedSpec }), (o) => o.valid && o.mermaid.includes('|9 back|'));
 
 // ---------- writes (sandbox only) ----------
 if (WRITES) {
@@ -101,10 +123,19 @@ if (WRITES) {
   const created = await step('create_skill (inbound phone)', () => call('create_skill', { name: skillName }), (o) => o.created);
   const obSkill = `MCP_Test_OB_${stamp}`;
   await step('create_skill (outbound)', () => call('create_skill', { name: obSkill, outbound: true }), (o) => o.created && o.note.includes('NOT RUNNING'));
-  await step('configure_outbound_skill', () => call('configure_outbound_skill', {
+  await step('configure_outbound_skill (retry + full-week schedule)', () => call('configure_outbound_skill', {
     skill: obSkill, max_attempts: 3, minimum_retry_minutes: 240,
-    schedule: [{ days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], start: '09:00', end: '19:00' }],
-  }), (o) => o.retrySettings && (o.scheduleSettings || o.scheduleNotApplied));
+    schedule: [
+      { days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], start: '09:00', end: '19:00' },
+      { days: ['saturday', 'sunday'], start: '10:00', end: '16:00' },
+    ],
+  }), (o) => o.retrySettings && o.scheduleSettings);
+  await step('configure_outbound_skill refuses partial-week schedule', async () => {
+    try {
+      await call('configure_outbound_skill', { skill: obSkill, schedule: [{ days: ['monday'], start: '09:00', end: '19:00' }] });
+      return { refused: false };
+    } catch (e) { return { refused: e.message.includes('all 7 days') }; }
+  }, (o) => o.refused);
   await step('create_campaign', () => call('create_campaign', { name: `MCP_Test_Campaign_${stamp}`, skills: [skillName] }), (o) => o.created && o.skillsAssigned === 1);
   await step('create_dispositions', () => call('create_dispositions', { names: [`MCP_Test_Disp_${stamp}`] }), (o) => o.created === 1);
   await step('create_hours_of_operation', () => call('create_hours_of_operation', {
@@ -113,6 +144,20 @@ if (WRITES) {
   }), (o) => o.created);
   await step('create_unavailable_code', () => call('create_unavailable_code', { name: `MCP_Test_${stamp}` }), (o) => o.created);
   await step('create_dnc_group', () => call('create_dnc_group', { name: `MCP_Test_DNC_${stamp}`, numbers: ['5550100001'], scrub_skills: [obSkill] }), (o) => o.created && o.numbersAdded === 1);
+  await step('get_dnc_group', () => call('get_dnc_group', { dnc_group: `MCP_Test_DNC_${stamp}` }), (o) => o.dncGroupId && o.scrubbedSkills);
+  await step('assign_agent_skills', async () => {
+    const agents = await call('list_agents');
+    const me = agents.agents.find((x) => /api/i.test(x.name)) || agents.agents[0];
+    return call('assign_agent_skills', { agent: String(me.agentId), skills: [skillName] });
+  }, (o) => o.assigned === 1);
+  await step('create_address_book + assign to skill', async () => {
+    const ab = await call('create_address_book', {
+      name: `MCP_Test_AB_${stamp}`,
+      entries: [{ first_name: 'Front', last_name: 'Desk', phone: '5550100099' }],
+    });
+    if (!ab.created || ab.entriesAdded !== 1) throw new Error('create failed: ' + JSON.stringify(ab).slice(0, 200));
+    return call('assign_address_book', { address_book: `MCP_Test_AB_${stamp}`, entity_type: 'Skill', entities: [skillName] });
+  }, (o) => o.assigned);
   await step('upload_call_list (startSkill false)', () => call('upload_call_list', {
     name: `MCP_Test_List_${stamp}`, skill: obSkill,
     records: [
@@ -125,6 +170,12 @@ if (WRITES) {
   if (deployed) {
     await step('render_script (deployed IVR)', () => call('render_script', { script: deploySpec.name }), (o) => o.mermaid.includes('MENU') || o.mermaid.includes('Main Menu') || o.mermaid.includes('Press 1'));
     await step('get_script (deployed IVR round-trip)', () => call('get_script', { script: deploySpec.name }), (o) => o.format === 'json' && Object.values(o.script.actions).some((a) => a.name === 'MENU'));
+  }
+  const nestedDeploy = { ...nestedSpec, menu: { ...nestedSpec.menu, choices: nestedSpec.menu.choices.map((c) => c.action === 'transfer_to_skill' ? { ...c, skill: skillName } : c) } };
+  const nestedOk = await step('deploy_script (nested submenu IVR)', () => call('deploy_script', { spec: nestedDeploy }), (o) => o.saved && o.errors === 0);
+  if (nestedOk) {
+    await step('round-trip nested IVR (2 menus)', () => call('get_script', { script: nestedDeploy.name }), (o) =>
+      o.format === 'json' && Object.values(o.script.actions).filter((a) => a.name === 'MENU').length === 2);
   }
 }
 

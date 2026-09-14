@@ -138,6 +138,74 @@ test('scriptJsonToMermaid renders a composed script', () => {
   assert.ok(m.includes('-->'));
 });
 
+const NESTED_SPEC = {
+  name: 'MCP_Test_Nested',
+  greeting: 'Thanks for calling.',
+  menu: {
+    prompt: 'Press 1 for sales, 2 for billing options.',
+    choices: [
+      { digit: '1', action: 'transfer_to_skill', skill: 'Sales', pre_transfer_message: 'Connecting you to sales.' },
+      {
+        digit: '2', action: 'submenu', name: 'Billing',
+        menu: {
+          prompt: 'Press 1 for balance, 2 for payments, 9 to go back.',
+          choices: [
+            { digit: '1', action: 'play_message', message: 'Your balance is available online.' },
+            { digit: '2', action: 'transfer_to_skill', skill: 'Billing' },
+            { digit: '9', action: 'previous_menu' },
+          ],
+        },
+      },
+    ],
+  },
+};
+
+test('validateIvrSpec accepts nested submenus with previous_menu', () => {
+  assert.deepEqual(validateIvrSpec(NESTED_SPEC), { ok: true, errors: [] });
+});
+
+test('validateIvrSpec rejects previous_menu on the main menu', () => {
+  const v = validateIvrSpec({ name: 'x', menu: { prompt: 'p', choices: [{ digit: '9', action: 'previous_menu' }] } });
+  assert.ok(v.errors.some((e) => e.includes('previous_menu')));
+});
+
+test('validateIvrSpec rejects submenu without a nested menu and over-deep nesting', () => {
+  const v = validateIvrSpec({ name: 'x', menu: { prompt: 'p', choices: [{ digit: '1', action: 'submenu' }] } });
+  assert.ok(v.errors.some((e) => e.includes('submenu requires a nested menu')));
+  const deep = { prompt: 'p', choices: [{ digit: '1', action: 'hangup' }] };
+  const wrap = (m) => ({ prompt: 'p', choices: [{ digit: '1', action: 'submenu', menu: m }] });
+  const v2 = validateIvrSpec({ name: 'x', menu: wrap(wrap(wrap(deep))) });
+  assert.ok(v2.errors.some((e) => e.includes('nest at most')));
+});
+
+test('specToScript composes submenus, pre-transfer, and back-branches', () => {
+  const s = specToScript(NESTED_SPEC, 4606137, (n) => n);
+  const actions = Object.values(s.actions);
+  const menus = actions.filter((a) => a.name === 'MENU');
+  assert.equal(menus.length, 2);
+  // pre-transfer PLAY exists and feeds the Sales REQAGENT
+  const pre = actions.find((a) => a.name === 'PLAY' && a.label === 'Pre-transfer');
+  assert.ok(pre);
+  const sales = actions.find((a) => a.name === 'REQAGENT' && a.label.includes('Sales'));
+  assert.equal(s.branches[pre.actionId][0].to, sales.actionId);
+  // main menu case 2 goes to the submenu; submenu case 9 comes back
+  const [main, sub] = menus.map((m) => m.actionId).sort((a, b) => a - b);
+  const mainCases = s.branches[main].filter((b) => b.type === 'case');
+  assert.ok(mainCases.some((b) => b.label === '2' && b.to === sub));
+  const subCases = s.branches[sub].filter((b) => b.type === 'case');
+  assert.ok(subCases.some((b) => b.label === '9' && b.to === main));
+  // play_message inside the submenu returns to the SUBMENU, not the main menu
+  const info = actions.find((a) => a.name === 'PLAY' && a.label === 'Info');
+  assert.equal(s.branches[info.actionId][0].to, sub);
+});
+
+test('specToMermaid renders nested menus and back edges', () => {
+  const m = specToMermaid(NESTED_SPEC);
+  assert.equal((m.match(/\{"/g) || []).length, 2); // two menu diamonds
+  assert.ok(m.includes('|9 back|'));
+  assert.ok(m.includes('Skill: Billing'));
+});
+
 test('scriptXmlToMermaid parses ActionStructs', () => {
   const xml = `<Actions><ActionStruct><ActionID>1</ActionID><Action>BEGIN</Action><Caption>Begin</Caption>
     <DefaultNextAction><Text /><ActionID>2</ActionID></DefaultNextAction></ActionStruct>

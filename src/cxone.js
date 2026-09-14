@@ -154,14 +154,17 @@ export class CxoneClient {
 
   // Collect paged results. CXone pages with skip/top (default 50, max 100)
   // and names the payload array per resource (skills, agents, ...), so the
-  // caller passes `key`. Caps at `max` so a huge BU can't blow up a response.
+  // caller passes `key`. Some endpoints wrap the payload in `resultSet` and
+  // return totalRecords as a STRING - both are normalized here. Caps at
+  // `max` so a huge BU can't blow up a tool response.
   async listAll(path, key, query = {}, { max = 500 } = {}) {
     const out = [];
     let skip = 0;
     let total = null;
     for (;;) {
       const page = await this.get(path, { ...query, top: Math.min(100, max), skip });
-      total = page.totalRecords ?? total;
+      const reported = page.totalRecords ?? page.resultSet?.totalRecords;
+      if (reported != null) total = Number(reported);
       const rows = page[key] || page.resultSet?.[key] || [];
       out.push(...rows);
       if (!rows.length || out.length >= max || (total != null && out.length >= total)) break;

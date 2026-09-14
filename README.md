@@ -1,14 +1,15 @@
 # nice-mcp
 
-**Your CXone tenant, in your AI's hands.** An open-source MCP server for NiCE CXone on Cloudflare Workers. Zero dependencies, no terminal required, and its whole purpose is to **build**: skills (routing AND the outbound dialer config), agents, teams, campaigns, dispositions, hours of operation, points of contact, DNC groups, calling lists - and **Studio scripts**: real IVRs composed from plain english, diagrammed in chat before deploy, and validated by CXone's own server-side syntax check on save.
+**Your CXone tenant, in your AI's hands.** An open-source MCP server for NiCE CXone on Cloudflare Workers. Zero dependencies, no terminal required, and its whole purpose is to **build**: skills (routing AND the outbound dialer config), agents, teams, campaigns, dispositions, hours of operation, points of contact, DNC groups, calling lists - and **Studio scripts**: real IVRs with nested submenus, composed from plain english, diagrammed in chat before deploy, and validated by CXone's own server-side syntax check on save.
 
 > It builds, not just reads.
 
 Prompt Claude (or any MCP client):
 
-- *"create an outbound skill called Fall Reactivation with Personal Connection, 3 attempts max, retry no-answers after 4 hours"*
-- *"build an IVR: greet callers, press 1 for sales, 2 for support, 3 to hear our hours. show me the diagram first"*
+- *"create an outbound skill called Fall Reactivation with Personal Connection, 3 attempts max, retry no-answers after 4 hours, dialing 9 to 7 on weekdays and 10 to 4 on weekends"*
+- *"build an IVR: greet callers, press 1 for sales, press 2 for a billing menu with balance, payments, and a way back. show me the diagram first"*
 - *"draw my Main Inbound script as a diagram"*
+- *"give me the outbound overview - what dials, when, against which DNC lists"*
 - *"stage 200 test records on the reactivation skill - do not start anything"*
 - *"create a DNC group seeded with these numbers and scrub the reactivation skill against it"*
 - *"repoint our main number to the new script"*
@@ -43,17 +44,17 @@ The MCP endpoint is `https://<your-worker>/mcp`.
 
 Then try: *"check the connection and list my skills."*
 
-## The toolbox (37 tools)
+## The toolbox (42 tools)
 
 | Group | Tools |
 |---|---|
 | 🔌 Tenant & Connection | `about`, `check_connection`, `get_business_unit` |
-| 🎯 Skills (Routing & Dialer) | `list_skills`, `get_skill`, `create_skill` ✏️, `configure_outbound_skill` ✏️, `assign_skill_agents` ✏️ |
+| 🎯 Skills (Routing & Dialer) | `list_skills`, `get_skill`, `create_skill` ✏️, `configure_outbound_skill` ✏️, `assign_skill_agents` ✏️, `assign_agent_skills` ✏️ |
 | 👥 Agents & Teams | `list_agents`, `get_agent`, `list_teams`, `create_team` ✏️ |
 | 🗂️ Campaigns & Dispositions | `list_campaigns`, `create_campaign` ✏️, `list_dispositions`, `create_dispositions` ✏️ |
 | 🕐 Hours & Codes | `list_hours_of_operation`, `create_hours_of_operation` ✏️, `list_unavailable_codes`, `create_unavailable_code` ✏️ |
-| 📇 Numbers & Entry Points | `list_points_of_contact`, `create_point_of_contact` ✏️, `repoint_point_of_contact` ✏️, `list_dnis`, `list_address_books`, `create_address_book` ✏️ |
-| 📤 Outbound Compliance & Records | `list_dnc_groups`, `create_dnc_group` ✏️, `list_call_lists`, `upload_call_list` ✏️ |
+| 📇 Numbers & Entry Points | `list_points_of_contact`, `create_point_of_contact` ✏️, `repoint_point_of_contact` ✏️, `list_dnis`, `list_address_books`, `create_address_book` ✏️, `assign_address_book` ✏️ |
+| 📤 Outbound Compliance & Records | `outbound_overview`, `list_dnc_groups`, `get_dnc_group`, `create_dnc_group` ✏️, `list_call_lists`, `get_call_list`, `upload_call_list` ✏️ |
 | 🏗️ Studio Scripts (IVR Builder) | `list_scripts`, `get_script`, `render_script`, `build_ivr`, `deploy_script` ✏️, `script_history` |
 | ⚡ Power | `cxone_api_call` ✏️ (any ACD Admin API endpoint; GET/POST/PUT/PATCH only, refuses DELETE and everything that dials) |
 
@@ -72,11 +73,14 @@ CXone names things differently than Five9 or Genesys, and the server teaches you
 
 - **Zero dependencies.** Not one npm package. The Worker is plain JS on `fetch` and Web Crypto.
 - **Two-field setup.** Auth is CXone's User Hub access-key flow; the token's own claims name the tenant, and the public `.well-known/cxone-configuration` endpoint maps it to the regional API host. Paste two keys, everything else is discovered.
-- **The IVR builder writes the real web-Studio JSON** (`header`, `actions`, `properties`, `branches`) against CXone's global action library (BEGIN, MENU, PLAY, REQAGENT, MUSIC, HANGUP), and saves through `POST /scripts` - the same endpoint web Studio itself saves through. CXone's server-side SYNTAX_CHECK validates every save and its errors/warnings are relayed verbatim.
+- **The IVR builder writes the real web-Studio JSON** (`header`, `actions`, `properties`, `branches`) against CXone's global action library (BEGIN, MENU, PLAY, REQAGENT, MUSIC, HANGUP - the GUIDs are product constants, identical on every tenant), and saves through `POST /scripts` - the same endpoint web Studio itself saves through. CXone's server-side SYNTAX_CHECK validates every save and its errors/warnings are relayed verbatim. Menus nest three levels deep with back-navigation.
+- **Round-trip editing.** `get_script` returns the same JSON shape `deploy_script` accepts, so read-modify-deploy works on any web-Studio script.
 - **Any script diagrams.** Web-Studio scripts render from their JSON; Desktop-Studio-only scripts fall back to a best-effort render of their XML export. Instant documentation either way.
 - **OAuth 2.1 built in** (dynamic client registration, PKCE, stateless HMAC-signed tokens), so it plugs straight into Claude and ChatGPT as a connector.
+- **The swagger drifts; the tools encode reality.** Verified live and baked in: several create endpoints are batch-shaped and can return HTTP 200 with a per-item failure inside; inbound skills require service-level fields the docs call optional; campaign creation only works on v33.0 with a flat body; call-list creation takes its name as a query param and maps the phone column via `destinationMappings: "PhoneNumber"`; the ACD API answers "No known way to render data" unless you send an `Accept` header (Node's fetch does, workerd's doesn't). Every one of these is a comment in the source next to the code that handles it.
+- **One honest limitation, stated instead of hidden:** the dialing-schedule endpoint only accepts a schedule where all seven days have an active window (any inactive day is rejected however encoded), and disposition-to-skill assignment has no working write API - both are explained by the tools at call time and finished in the CXone UI.
 - **Rate limits are undocumented by design** on CXone; the client retries once on 401 and backs off exponentially on 429.
-- Tested against a live CXone tenant: 12 unit tests plus a 40-step live smoke suite (`npm test`, `npm run smoke` - read-only by default, `-- --writes` exercises the write tools in a sandbox).
+- Tested against a live CXone tenant: 17 unit tests plus a 48-step live smoke suite (`npm test`, `npm run smoke` - read-only by default, `-- --writes` exercises the write tools in a sandbox).
 
 ## Scoping the access key
 
