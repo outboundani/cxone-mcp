@@ -216,7 +216,7 @@ function authPage({ clientId, redirectUri, state, codeChallenge, error }) {
   </form>` : '';
   return new Response(`<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Authorize · nice-mcp</title>
+<title>Authorize · cxone-mcp</title>
 <style>
   body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:420px;margin:14vh auto;padding:0 1.25rem;line-height:1.55;color:#1a2332}
   h1{font-size:1.35rem;letter-spacing:-.02em}
@@ -228,7 +228,7 @@ function authPage({ clientId, redirectUri, state, codeChallenge, error }) {
   p{color:#5b6779;font-size:.92rem}
   @media (prefers-color-scheme:dark){body{background:#0f141b;color:#dbe2ea}input[type=password]{background:#1e2733;border-color:#334155;color:#dbe2ea}p{color:#93a1b3}.err{background:#3b1219;color:#f6b1b1}}
 </style></head><body>
-<h1>🔐 nice-mcp</h1>
+<h1>🔐 cxone-mcp</h1>
 <p>An AI client is asking for access to this NiCE CXone MCP server. Enter the server's access key to authorize it.</p>
 ${error ? `<div class="err">${esc(error)}</div>` : ''}
 ${form}

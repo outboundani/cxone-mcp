@@ -1,4 +1,4 @@
-# nice-mcp
+# cxone-mcp
 
 **Your CXone tenant, in your AI's hands.** An open-source MCP server for NiCE CXone on Cloudflare Workers. Zero dependencies, no terminal required, and its whole purpose is to **build**: skills (routing AND the outbound dialer config), agents, teams, campaigns, dispositions, hours of operation, points of contact, DNC groups, calling lists - and **Studio scripts**: real IVRs with nested submenus, composed from plain english, diagrammed in chat before deploy, and validated by CXone's own server-side syntax check on save.
 
@@ -25,7 +25,7 @@ The IVR builder composes the real web-Studio script JSON, shows you the flow as 
 
 ## Deploy your own in 3 steps
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/outboundani/nice-mcp)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/outboundani/cxone-mcp)
 
 1. **Deploy**: click the button (free Cloudflare account), or `git clone` + `npx wrangler deploy`. The CONFIG KV namespace is auto-provisioned.
 2. **Create a CXone access key**: Admin → Employees → (a dedicated least-privilege admin user) → Security tab → **Add Access Key**. Copy the ID and Secret (the secret is shown once).

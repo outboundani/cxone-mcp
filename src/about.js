@@ -4,7 +4,7 @@
 
 export const ABOUT = `## About this server
 
-nice-mcp connects AI models to a NiCE CXone tenant through the ACD Admin API.
+cxone-mcp connects AI models to a NiCE CXone tenant through the ACD Admin API.
 Its whole purpose is to **build**: skills (routing AND the outbound dialer),
 agents' assignments, teams, campaigns, dispositions, hours of operation,
 points of contact, DNC groups, calling lists - and Studio scripts, composed

@@ -1,5 +1,5 @@
 {
-  "name": "nice-mcp",
+  "name": "cxone-mcp",
   "version": "0.1.0",
   "description": "MCP server for NiCE CXone on Cloudflare Workers - it builds, not just reads (skills, the outbound dialer, and real Studio IVRs composed from plain english)",
   "private": true,

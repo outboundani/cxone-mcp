@@ -63,7 +63,7 @@ export function landingPage(tools, cfg = { configured: true }) {
       </div>
     </section>`).join('');
 
-  return page('nice-mcp - NiCE CXone for AI, over MCP', `
+  return page('cxone-mcp - NiCE CXone for AI, over MCP', `
   <style>
   main{max-width:1060px;margin:0 auto;padding:0 1.25rem 4rem}
   .hero{padding:4rem 0 2.5rem;text-align:center}
@@ -102,7 +102,7 @@ export function landingPage(tools, cfg = { configured: true }) {
       ${cfg.configured
         ? '<a class="btn primary" href="#tools">🛠️ Browse the tools</a>'
         : '<a class="btn primary" href="/setup">⚙️ Finish setup - connect your CXone tenant</a>'}
-      <a class="btn" href="https://github.com/outboundani/nice-mcp">★ Star on GitHub</a>
+      <a class="btn" href="https://github.com/outboundani/cxone-mcp">★ Star on GitHub</a>
     </div>
     ${cfg.configured ? '' : `<p style="margin-top:1rem"><span class="pill">👋 This server isn't connected to a CXone tenant yet - <a href="/setup">finish setup</a> (takes 1 minute, no terminal needed)</span></p>`}
   </div>
@@ -123,12 +123,12 @@ export function landingPage(tools, cfg = { configured: true }) {
 
   <h2 id="tools">Tools</h2>
   ${toolCards}
-  <footer>nice-mcp · MIT · built by <a href="https://www.linkedin.com/in/ryanshatzkamer">Ryan Shatzkamer</a> (outboundIQ) · creator of <a href="https://github.com/outboundani/five9-mcp">five9-mcp</a> and <a href="https://github.com/outboundani/genesys-mcp">genesys-mcp</a></footer>
+  <footer>cxone-mcp · MIT · built by <a href="https://www.linkedin.com/in/ryanshatzkamer">Ryan Shatzkamer</a> (outboundIQ) · creator of <a href="https://github.com/outboundani/five9-mcp">five9-mcp</a> and <a href="https://github.com/outboundani/genesys-mcp">genesys-mcp</a></footer>
   </main>`);
 }
 
 export function setupPage(cfg) {
-  return page('Setup · nice-mcp', `
+  return page('Setup · cxone-mcp', `
   <style>
   main{max-width:560px;margin:0 auto;padding:3rem 1.25rem 4rem}
   h1{letter-spacing:-.02em}
