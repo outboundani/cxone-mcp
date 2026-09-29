@@ -19,8 +19,8 @@ The IVR builder composes the real web-Studio script JSON, shows you the flow as 
 ## What it deliberately does NOT do
 
 - **No analytics or KPI tools.** This is the build side of the house, on purpose.
-- **No dialing ignition.** Outbound skills are created **not running**, calling lists always upload with `startSkill: false` (hard-coded), and no tool can start a skill. The raw API tool refuses the start endpoints at the code level. The AI builds the dialer; a human presses go.
-- **No live-contact control.** No barge, no end-call, no recording toggles - the raw API tool refuses the contacts endpoints.
+- **No dialing ignition.** Outbound skills are created **not running**, calling lists always upload with `startSkill: false` (hard-coded), and no tool can start a skill. The raw API tool refuses the start endpoints and any `startSkill`/`isRunning` that is not `false`, at the code level, after normalizing the path (no dot segments, no encoding, no version tricks). The AI builds the dialer; a human presses go.
+- **No live-contact control.** No barge, no end-call, no recording toggles - the raw API tool refuses the contacts, interactions, and agent-sessions endpoints.
 - **No deletes.** There are no delete tools, and the raw API tool refuses `DELETE`. Create-first by design.
 
 ## Deploy your own in 3 steps
@@ -56,7 +56,7 @@ Then try: *"check the connection and list my skills."*
 | 📇 Numbers & Entry Points | `list_points_of_contact`, `create_point_of_contact` ✏️, `repoint_point_of_contact` ✏️, `list_dnis`, `list_address_books`, `create_address_book` ✏️, `assign_address_book` ✏️ |
 | 📤 Outbound Compliance & Records | `outbound_overview`, `list_dnc_groups`, `get_dnc_group`, `create_dnc_group` ✏️, `list_call_lists`, `get_call_list`, `upload_call_list` ✏️ |
 | 🏗️ Studio Scripts (IVR Builder) | `list_scripts`, `get_script`, `render_script`, `build_ivr`, `deploy_script` ✏️, `script_history` |
-| ⚡ Power | `cxone_api_call` ✏️ (any ACD Admin API endpoint; GET/POST/PUT/PATCH only, refuses DELETE and everything that dials) |
+| ⚡ Power | `cxone_api_call` ✏️ (reads any ACD Admin API path; writes only to the families the typed tools build; refuses DELETE, everything that dials, and live contacts; redacts secrets) |
 
 ✏️ = writes to your tenant. Reads are always safe; connected AIs are instructed to confirm before every write.
 

@@ -4,7 +4,8 @@
 // Scope is deliberate: config reads + create/build actions. NO analytics/KPI
 // tools, and NO dialing ignition: outbound skills are never started, call
 // list uploads always land with startSkill false, and the raw API tool
-// refuses DELETE and every start/spawn path. A human presses go.
+// refuses DELETE and every start/spawn path, normalizing before it
+// allowlists (src/rules.js). A human presses go.
 //
 // CXone vocabulary guardrail (it differs from Five9/Genesys): a SKILL is the
 // queue/campaign workhorse (outbound skills carry the dialer config); a
@@ -27,6 +28,7 @@
 
 import { CxoneClient, CxoneError } from './cxone.js';
 import { ABOUT } from './about.js';
+import { checkRawCall, redactSecrets } from './rules.js';
 import {
   validateIvrSpec, specToScript, specToMermaid, formatSaveReport,
   scriptJsonToMermaid, scriptXmlToMermaid, ACTION_LIBRARY,
@@ -1102,33 +1104,27 @@ export const TOOLS = [
   // ----- power tool -----
   {
     name: 'cxone_api_call',
-    description: 'Call any CXone ACD Admin API endpoint directly (for endpoints without a typed tool). GET/POST/PUT/PATCH only - DELETE is refused by design, and so is anything that starts dialing or spawns calls (skills/{id}/start, scripts/start, startSkill:true anywhere) and live-contact control (contacts/*, interactions/*). Treat any non-GET call as a write: describe the method, path, and body and confirm with the user first. Prefer the typed tools when one exists - they encode the quirks (batch results, version pinning, query-vs-body params) this raw tool does not.',
+    description: 'Call a CXone ACD Admin API endpoint directly (for endpoints without a typed tool). GETs can read any plain path; writes (POST/PUT/PATCH) are allowlisted to the families the typed tools build: skills, agent skills, campaigns, teams, dispositions, hours-of-operation, points-of-contact, unavailable-codes, address-books, dnc-groups, lists/call-lists, and scripts (save only). Always refused: DELETE, anything that starts dialing or spawns calls (skills/{id}/start, scripts/start, startSkill or isRunning set to anything but false, in any casing), live-contact control (contacts/*, interactions/*, agent-sessions/*), and paths with encoding, dot segments, or query strings (use `query`). Secrets are redacted from responses. Treat any non-GET call as a write: describe the method, path, and body and confirm with the user first. Prefer the typed tools when one exists - they encode the quirks (batch results, version pinning, query-vs-body params) this raw tool does not.',
     inputSchema: {
       type: 'object',
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH'] },
-        path: { type: 'string', description: 'Path relative to /inContactAPI/services/v30.0/, e.g. "skills" or "agents/123/skills"' },
-        query: { type: 'object', description: 'Query string parameters', additionalProperties: true },
+        path: { type: 'string', description: 'Path relative to /inContactAPI/services/v30.0/, e.g. "skills" or "agents/123/skills". Plain segments only: no %, ?, #, ;, \\, whitespace, or empty/./.. segments.' },
+        query: { type: 'object', description: 'Query string parameters: identifier keys, scalar values', additionalProperties: true },
         body: { type: 'object', description: 'JSON body for POST/PUT/PATCH', additionalProperties: true },
-        version: { type: 'string', description: 'API version override, e.g. v33.0 (campaign create needs it)' },
+        version: { type: 'string', description: 'API version override in the form vNN.N, e.g. v33.0 (campaign create needs it)' },
       },
       required: ['method', 'path'],
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const p = String(a.path).replace(/^\/+/, '').toLowerCase();
-      if (a.method !== 'GET') {
-        if (/skills\/[^/]+\/start\b/.test(p) || /^scripts\/start\b/.test(p)) {
-          throw new CxoneError('Refused: this server never starts outbound dialing or spawns script runs. A human presses go in CXone.', 403);
-        }
-        if (/^contacts\//.test(p) || /^interactions\//.test(p)) {
-          throw new CxoneError('Refused: live-contact control (barge, end, record) is out of scope for this server by design.', 403);
-        }
-        if (JSON.stringify(a.body || {}).match(/"startSkill"\s*:\s*true/)) {
-          throw new CxoneError('Refused: startSkill must stay false - a human starts skills in CXone.', 403);
-        }
-      }
-      return cx.api(a.method, a.path, { body: a.body, query: a.query, version: a.version });
+      // Normalize-then-allowlist (src/rules.js): the path, version, query,
+      // and body are validated BEFORE any URL is built, and only the checked
+      // values are sent.
+      const c = checkRawCall(a);
+      if (!c.ok) throw new CxoneError(c.message, 403);
+      const res = await cx.api(c.method, c.path, { body: c.method === 'GET' ? undefined : a.body, query: c.query, version: c.version });
+      return redactSecrets(res);
     },
   },
 ];

@@ -110,7 +110,16 @@ export class CxoneClient {
   async api(method, path, { body, query, version, _attempt = 0 } = {}) {
     const s = await this.session();
     const rel = String(path).replace(/^\/+/, '');
-    const url = new URL(`${s.apiBase}/inContactAPI/services/${version || ACD_VERSION}/${rel}`);
+    const ver = version || ACD_VERSION;
+    if (!/^v\d{2}\.\d$/.test(ver)) throw new CxoneError(`Bad API version "${ver}" - expected the form v30.0`, 400);
+    const expected = `/inContactAPI/services/${ver}/${rel}`;
+    const url = new URL(`${s.apiBase}${expected}`);
+    // Defense in depth: if URL parsing rewrote the path (dot segments, a
+    // stray ? or #), the request would land somewhere other than what the
+    // caller checked. Refuse instead of sending it.
+    if (!url.pathname.endsWith(expected) || url.search || url.hash) {
+      throw new CxoneError(`Refused: the path "${rel}" does not survive URL parsing unchanged.`, 400);
+    }
     for (const [k, v] of Object.entries(query || {})) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }

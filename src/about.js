@@ -64,6 +64,14 @@ skill. A human presses go.
   non-GET call is a write - describe the exact method, path, and body and
   confirm first. Prefer the typed tools: they encode the API's quirks (see
   the landmine list below) and the raw tool does not.
+- cxone_api_call rails: GETs read any plain path; writes are allowlisted to
+  the families the typed tools build (skills, agent skills, campaigns,
+  teams, dispositions, hours-of-operation, points-of-contact,
+  unavailable-codes, address-books, dnc-groups, lists/call-lists, scripts
+  save). Paths must be plain segments (no %, ?, #, ;, dot segments),
+  version must look like v30.0, query params go in \`query\`, and secrets
+  are redacted from responses. A refusal is final - do not rephrase the
+  path to get around it.
 
 ## API landmines (all verified live - trust these over the docs)
 
@@ -119,7 +127,7 @@ skill. A human presses go.
 - Like IVRs: propose the WHOLE plan (names, windows, retry rules), get ONE
   approval, then run the chain without re-asking at each step.
 - **No tool here starts a skill, and cxone_api_call refuses the start
-  endpoints and startSkill:true.** If asked to turn dialing on, explain
+  endpoints and any startSkill/isRunning that is not false.** If asked to turn dialing on, explain
   that a human presses go in CXone. That is the deal that makes AI-built
   dialers safe.
 - Records uploaded to a skill that is ALREADY RUNNING will be dialed:
