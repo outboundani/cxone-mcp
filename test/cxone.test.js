@@ -99,8 +99,10 @@ test('the client pins the URL it sends even if a cached session were tampered wi
 test('a hanging CXone answer ends at the call budget; nothing sent means "nothing was changed"', async () => {
   const slow = makeCxone({ hang: true });
   const started = Date.now();
-  await assert.rejects(callTool({ ...slow.cfg, budgetMs: 300 }, 'list_skills', {}), (e) => e.code === 'time_limit' && /nothing was changed/.test(e.message));
+  await assert.rejects(callTool({ ...slow.cfg, budgetMs: 300 }, 'configure_outbound_skill', { skill: 'Reactivation', max_attempts: 3 }), (e) => e.code === 'time_limit' && /nothing was changed/.test(e.message));
   assert.ok(Date.now() - started < 2000, 'aborted at the budget');
+  // A read that times out says so, without talking about changes.
+  await assert.rejects(callTool({ ...makeCxone({ hang: true }).cfg, budgetMs: 300 }, 'list_skills', {}), (e) => e.code === 'time_limit' && /^CXone did not answer in time/.test(e.message));
 });
 
 test('a time out after a write went out is reported as possibly completed, never as unchanged', async () => {

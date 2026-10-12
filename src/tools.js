@@ -1243,7 +1243,9 @@ export async function callTool(cfg, name, args = {}) {
   } catch (e) {
     // Out of time before any write went out: nothing changed, so say so plainly.
     if (e?.code === 'time_limit' && !cx.writeSent) {
-      throw new CxoneError('The call ran out of time before anything was sent to CXone, so nothing was changed. Try again in a moment.', 504, 'time_limit');
+      throw new CxoneError(WRITE_TOOLS.has(name)
+        ? 'The call ran out of time before anything was sent to CXone, so nothing was changed. Try again in a moment.'
+        : 'CXone did not answer in time. Try again in a moment.', 504, 'time_limit');
     }
     throw e;
   }
