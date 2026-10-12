@@ -880,7 +880,7 @@ export const TOOLS = [
   },
   {
     name: 'upload_call_list',
-    description: 'Create a calling list and upload records to it for an outbound skill (max 200 records per call; phone as E.164 or 10-digit; every record gets an external_id, auto-derived when missing; optional first_name/last_name/time_zone/zip columns map automatically). The upload ALWAYS lands with startSkill false (hard-coded) - records sit staged and a human starts the skill. CAUTION: records uploaded to a skill that is ALREADY RUNNING will be dialed - check list_skills isRunning and confirm the target skill with the user first.',
+    description: 'Create a calling list and upload records to it for an outbound skill (max 200 records per call; phone as E.164 or 10 to 15 digits; column names are letters, digits and _; values are text or numbers; every record gets an external_id, auto-derived when missing; optional first_name/last_name/time_zone/zip columns map automatically). The upload ALWAYS lands with startSkill false (hard-coded) - records sit staged and a human starts the skill. CAUTION: records uploaded to a skill that is ALREADY RUNNING will be dialed - check list_skills isRunning and confirm the target skill with the user first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -891,7 +891,7 @@ export const TOOLS = [
           description: 'Rows: { phone, first_name?, last_name?, external_id?, time_zone?, zip?, ...custom }',
           items: { type: 'object', additionalProperties: true },
         },
-        expiration_days: { type: 'number', description: 'Days until records expire (default 30)' },
+        expiration_days: { type: 'number', description: 'Days until records expire, 1 to 365 (default 30)' },
       },
       required: ['name', 'skill', 'records'],
       additionalProperties: false,
@@ -899,12 +899,33 @@ export const TOOLS = [
     handler: async (cx, a) => {
       if (!Array.isArray(a.records) || !a.records.length) throw new CxoneError('records must be a non-empty array', 400);
       if (a.records.length > 200) throw new CxoneError('Max 200 records per call - send the rest in another call', 400);
+      // Validate before any request: column names become the CSV header as
+      // they are, so they must be plain identifiers (a "," or newline in a key
+      // would shift every later column); values are scalars; phones are 10 to
+      // 15 digits.
+      const COL = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+      const days = a.expiration_days ?? 30;
+      if (!Number.isInteger(days) || days < 1 || days > 365) throw new CxoneError('expiration_days must be a whole number from 1 to 365', 400);
+      const clean = a.records.map((r, i) => {
+        if (!r || typeof r !== 'object' || Array.isArray(r)) throw new CxoneError(`record ${i + 1} must be an object`, 400);
+        const out = {};
+        for (const [k, v] of Object.entries(r)) {
+          if (!COL.test(k)) throw new CxoneError(`record ${i + 1}: column name "${String(k).slice(0, 40)}" must be letters, digits and _ (starting with a letter)`, 400);
+          if (v !== null && v !== undefined && typeof v === 'object') throw new CxoneError(`record ${i + 1}: ${k} must be text or a number`, 400);
+          out[k] = v;
+        }
+        const phone = String(out.phone ?? '').replace(/[\s().-]/g, '');
+        if (!/^\+?\d{10,15}$/.test(phone)) throw new CxoneError(`record ${i + 1}: phone must be 10 to 15 digits, optionally starting with +`, 400);
+        out.phone = phone;
+        return out;
+      });
       const { skillId, skillName } = await resolveSkill(cx, a.skill);
       // Every record needs an external id; derive one when missing.
-      const records = a.records.map((r, i) => ({ external_id: r.external_id ?? `rec${i + 1}`, ...r }));
+      const records = clean.map((r, i) => ({ external_id: r.external_id ?? `rec${i + 1}`, ...r }));
       const cols = [...new Set(records.flatMap((r) => Object.keys(r)))];
       if (!cols.includes('phone')) throw new CxoneError('records need a "phone" column', 400);
-      const csvEsc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      // Rows are joined with CRLF, so a bare CR must be quoted too.
+      const csvEsc = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
       const csv = [cols.join(','), ...records.map((r) => cols.map((c) => csvEsc(r[c])).join(','))].join('\r\n');
       // listName and the column mappings ride as QUERY params; the phone
       // column maps through destinationMappings fieldName "PhoneNumber".
@@ -918,7 +939,8 @@ export const TOOLS = [
         body: { destinationMappings: [{ fieldName: 'PhoneNumber', fieldValue: 'phone' }] },
       });
       const listId = listRes.listId ?? listRes.resultSet?.listId ?? listRes.callingLists?.[0]?.listId;
-      const exp = new Date(Date.now() + (a.expiration_days ?? 30) * 86400000).toISOString().slice(0, 10);
+      if (listId === undefined || listId === null || !/^\d+$/.test(String(listId))) throw new CxoneError('CXone created the calling list but returned no list id, so no records were uploaded. Check list_call_lists before retrying.', 502);
+      const exp = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
       await cx.post(`lists/call-lists/${listId}/upload`, {
         listFile: btoa(unescape(encodeURIComponent(csv))),
         fileName: `${a.name.replace(/[^\w.-]+/g, '_')}.csv`,
