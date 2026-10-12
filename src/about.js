@@ -72,6 +72,14 @@ skill. A human presses go.
   version must look like v30.0, query params go in \`query\`, and secrets
   are redacted from responses. A refusal is final - do not rephrase the
   path to get around it.
+- Script reads (get_script, render_script, script_history, raw GETs)
+  replace credentials stored in Studio scripts with [redacted]. Never pass
+  content with [redacted] placeholders back to deploy_script: it is
+  refused, because it would overwrite the real values. Ask the user to
+  restore them or edit those properties in Studio.
+- Writes need the exact skill or script name (any case) or its id. A
+  "Did you mean" error is not a typo to fix silently: confirm the
+  suggested object with the user, then retry with its exact name.
 
 ## API landmines (all verified live - trust these over the docs)
 
