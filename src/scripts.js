@@ -298,9 +298,16 @@ export function formatSaveReport(res) {
 
 // ---------- Mermaid rendering ----------
 
+// A cut never splits a [redacted] marker (render_script redacts before
+// rendering), so the marker stays recognizable in the diagram.
+const MARK = '[redacted]';
 function mLabel(s, max = 60) {
   const t = String(s ?? '').replace(/"/g, "'").replace(/[\r\n]+/g, ' ').trim();
-  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+  if (t.length <= max) return t;
+  let cut = max - 1;
+  const m = t.lastIndexOf(MARK, cut);
+  if (m >= 0 && m + MARK.length > cut) cut = m + MARK.length;
+  return t.length > cut ? t.slice(0, cut) + '…' : t;
 }
 
 export function specToMermaid(spec) {

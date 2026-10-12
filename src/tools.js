@@ -29,6 +29,7 @@
 import { CxoneClient, CxoneError } from './cxone.js';
 import { ABOUT } from './about.js';
 import { checkRawCall, redactSecrets } from './rules.js';
+import { redactStudio, redactStudioXml, scrubStudioText, decodeBase64Text, containsRedaction } from './studio-redact.js';
 import {
   validateIvrSpec, specToScript, specToMermaid, formatSaveReport,
   scriptJsonToMermaid, scriptXmlToMermaid, ACTION_LIBRARY,
@@ -1072,7 +1073,7 @@ export const TOOLS = [
   },
   {
     name: 'get_script',
-    description: 'Get a script\'s full content by name or id. Web-Studio scripts return editable JSON (header, actions, properties, branches - the same shape deploy_script accepts as script_content, so read-modify-deploy works). Desktop-Studio-only scripts fall back to their XML export. Large output - use render_script when you just need the shape.',
+    description: 'Get a script\'s full content by name or id. Web-Studio scripts return editable JSON (header, actions, properties, branches - the same shape deploy_script accepts as script_content, so read-modify-deploy works). Desktop-Studio-only scripts fall back to their XML export. Secret-looking values (passwords, API keys, auth headers, tokens) are replaced with [redacted]. Large output - use render_script when you just need the shape.',
     inputSchema: {
       type: 'object',
       properties: { script: { type: 'string', description: 'Script name or id' } },
@@ -1086,7 +1087,12 @@ export const TOOLS = [
         if (json.header) return { format: 'json', script: json };
       } catch { /* Desktop-only scripts 500 on the JSON path */ }
       const raw = await cx.get(`scripts/${s.masterID}`);
-      const xml = raw.body ? decodeURIComponent(escape(atob(raw.body))) : '';
+      // The body is base64 XML, not always UTF-8 (UTF-16 and Windows-1252 exports exist).
+      const decoded = decodeBase64Text(raw.body);
+      if (decoded === null) return { format: 'xml', name: raw.name, scriptId: raw.ScriptId, xml: '', note: 'The script body could not be decoded as text, so it is not shown.' };
+      // Secrets are redacted on the whole document BEFORE truncation, so a cut
+      // never leaves part of a secret behind.
+      const xml = scrubStudioText(redactStudioXml(decoded));
       return { format: 'xml', name: raw.name, scriptId: raw.ScriptId, xml: xml.length > 40000 ? xml.slice(0, 40000) + '\n<!-- truncated -->' : xml };
     },
   },
@@ -1103,11 +1109,15 @@ export const TOOLS = [
       const s = await resolveScript(cx, a.script, { fuzzy: true });
       try {
         const json = await cx.get('scripts', { scriptPath: s.scriptName });
-        if (json.header) return { script: s.scriptName, source: 'web Studio JSON', mermaid: scriptJsonToMermaid(json), note: 'Render the mermaid diagram for the user.' };
+        // Secrets are redacted on the raw script BEFORE rendering: the renderer
+        // requotes and cuts labels, which would leave a partial secret that the
+        // text rules no longer recognize.
+        if (json.header) return { script: s.scriptName, source: 'web Studio JSON', mermaid: scriptJsonToMermaid(redactStudio(json)), note: 'Render the mermaid diagram for the user.' };
       } catch { /* fall through */ }
       const raw = await cx.get(`scripts/${s.masterID}`);
-      const xml = raw.body ? decodeURIComponent(escape(atob(raw.body))) : '';
-      return { script: s.scriptName, source: 'Desktop Studio XML (best effort)', mermaid: scriptXmlToMermaid(xml), note: 'Render the mermaid diagram for the user.' };
+      const xml = decodeBase64Text(raw.body);
+      if (xml === null) throw new CxoneError('The script body could not be decoded as text, so it cannot be rendered.', 422);
+      return { script: s.scriptName, source: 'Desktop Studio XML (best effort)', mermaid: scriptXmlToMermaid(scrubStudioText(redactStudioXml(xml))), note: 'Render the mermaid diagram for the user.' };
     },
   },
   {
@@ -1128,7 +1138,7 @@ export const TOOLS = [
   },
   {
     name: 'deploy_script',
-    description: 'Compose AND save an IVR script to the tenant from a build_ivr spec (or raw scriptContent JSON from get_script, for read-modify-deploy edits). CXone runs its own server-side SYNTAX_CHECK before saving; the report comes back verbatim (saved clean, saved with warnings, or REJECTED with nothing saved). CAUTION: saving a name that matches an existing script OVERWRITES it (a new version is minted; history survives - see script_history), and anything already wired to that name (a point of contact, a skill) runs the new version on the next call. The script is saved, not wired to a number: use create_point_of_contact to put it on a DNIS.',
+    description: 'Compose AND save an IVR script to the tenant from a build_ivr spec (or raw scriptContent JSON from get_script, for read-modify-deploy edits). CXone runs its own server-side SYNTAX_CHECK before saving; the report comes back verbatim (saved clean, saved with warnings, or REJECTED with nothing saved). Content that still carries [redacted] placeholders from get_script is refused (it would overwrite real credentials). CAUTION: saving a name that matches an existing script OVERWRITES it (a new version is minted; history survives - see script_history), and anything already wired to that name (a point of contact, a skill) runs the new version on the next call. The script is saved, not wired to a number: use create_point_of_contact to put it on a DNIS.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1139,6 +1149,11 @@ export const TOOLS = [
     },
     handler: async (cx, a) => {
       let content = a.script_content;
+      // Script reads replace secrets with [redacted]. Saving that back would
+      // overwrite the real credentials in the tenant with the marker.
+      if (content && containsRedaction(content)) {
+        throw new CxoneError('script_content contains [redacted] placeholders from a script read. Saving it would overwrite the real values in CXone with the placeholder. Put the real values back (or edit those properties in Studio) and deploy again. Nothing was saved.', 400);
+      }
       if (!content) {
         if (!a.spec) throw new CxoneError('Provide spec or script_content', 400);
         const session = await cx.session();
@@ -1181,7 +1196,7 @@ export const TOOLS = [
   // ----- power tool -----
   {
     name: 'cxone_api_call',
-    description: 'Call a CXone ACD Admin API endpoint directly (for endpoints without a typed tool). GETs can read any plain path; writes (POST/PUT/PATCH) are allowlisted to the families the typed tools build: skills, agent skills, campaigns, teams, dispositions, hours-of-operation, points-of-contact, unavailable-codes, address-books, dnc-groups, lists/call-lists, and scripts (save only). Always refused: DELETE, anything that starts dialing or spawns calls (skills/{id}/start, scripts/start, startSkill or isRunning set to anything but false, in any casing), live-contact control (contacts/*, interactions/*, agent-sessions/*), and paths with encoding, dot segments, or query strings (use `query`). Secrets are redacted from responses. Treat any non-GET call as a write: describe the method, path, and body and confirm with the user first. Prefer the typed tools when one exists - they encode the quirks (batch results, version pinning, query-vs-body params) this raw tool does not.',
+    description: 'Call a CXone ACD Admin API endpoint directly (for endpoints without a typed tool). GETs can read any plain path; writes (POST/PUT/PATCH) are allowlisted to the families the typed tools build: skills, agent skills, campaigns, teams, dispositions, hours-of-operation, points-of-contact, unavailable-codes, address-books, dnc-groups, lists/call-lists, and scripts (save only). Always refused: DELETE, anything that starts dialing or spawns calls (skills/{id}/start, scripts/start, startSkill or isRunning set to anything but false, in any casing), live-contact control (contacts/*, interactions/*, agent-sessions/*), and paths with encoding, dot segments, or query strings (use `query`). Secrets are redacted from responses (secret-looking fields, and credentials inside Studio scripts, including base64 script bodies); saving script content that still carries [redacted] placeholders is refused. Treat any non-GET call as a write: describe the method, path, and body and confirm with the user first. Prefer the typed tools when one exists - they encode the quirks (batch results, version pinning, query-vs-body params) this raw tool does not.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1220,8 +1235,9 @@ export async function callTool(cfg, name, args = {}) {
     throw new CxoneError('This server is not connected to CXone yet - open /setup, or set the CXONE_ACCESS_KEY_ID / CXONE_ACCESS_KEY_SECRET secrets.', 503);
   }
   const cx = new CxoneClient(cfg);
+  let result;
   try {
-    return await tool.handler(cx, args, cfg);
+    result = await tool.handler(cx, args, cfg);
   } catch (e) {
     // Out of time before any write went out: nothing changed, so say so plainly.
     if (e?.code === 'time_limit' && !cx.writeSent) {
@@ -1229,6 +1245,10 @@ export async function callTool(cfg, name, args = {}) {
     }
     throw e;
   }
+  // Studio scripts carry customer integration secrets (API keys, passwords,
+  // auth headers) in properties, snippets and base64 bodies: every CXone result
+  // passes the redaction before it reaches the model.
+  return redactStudio(result);
 }
 
 // UI metadata - which tools are writes, and how they group on the landing page.

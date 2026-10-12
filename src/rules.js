@@ -1,6 +1,8 @@
 // Pure safety rails for the raw API tool (cxone_api_call). No I/O here, so
 // everything that decides "is this allowed / what gets sent" is unit tested
 // in test/rules.test.js.
+
+import { containsRedaction } from './studio-redact.js';
 //
 // The pattern is normalize-then-allowlist. CXone builds the request URL with
 // `new URL(...)`, which resolves dot segments, and the server decodes %XX
@@ -171,6 +173,11 @@ export function checkRawCall({ method, path, query, body, version } = {}) {
   if (m !== 'GET') {
     const allowed = WRITES.some(([methods, r]) => methods.includes(m) && r.test(rel));
     if (!allowed) return refuse(`Refused: ${m} ${rel} is not on the raw tool's write allowlist. Writes are limited to the families the typed tools build: ${WRITE_FAMILIES}. Deletes, starts, live contacts, users, and credentials are out of scope.`);
+    // Script reads replace secrets with [redacted]; saving that back would
+    // overwrite the real credentials with the placeholder.
+    if (m === 'POST' && /^scripts$/i.test(rel) && containsRedaction(body)) {
+      return refuse('Refused: the script content contains [redacted] placeholders from a script read. Saving it would overwrite the real values in CXone. Put the real values back first.');
+    }
     // Call-list uploads must say startSkill false out loud.
     if (/^lists\/call-lists\/[^/]+\/upload$/i.test(rel)) {
       const key = Object.keys(body || {}).find((k) => normKey(k) === 'startskill');
