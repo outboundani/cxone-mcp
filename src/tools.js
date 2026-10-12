@@ -181,7 +181,7 @@ export const TOOLS = [
   // ----- skills (the queue/dialer workhorse) -----
   {
     name: 'list_skills',
-    description: 'List ACD skills (name, id, media type, inbound/outbound, campaign, running state). In CXone a skill is the routing/dialing unit: the closest thing to a queue AND a dialing campaign in other platforms. isRunning only appears for outbound skills that are actively dialing.',
+    description: 'List ACD skills (name, id, media type, inbound/outbound, campaign, running state). In CXone a skill is the routing/dialing unit: the closest thing to a queue AND a dialing campaign in other platforms. isRunning is true while an outbound skill is dialing and false when it is stopped; a missing value means CXone did not report the state, so treat it as unknown, not stopped.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -202,7 +202,7 @@ export const TOOLS = [
         skills: skills.map((s) => ({
           skillId: s.skillId, name: s.skillName, mediaType: s.mediaTypeName,
           isOutbound: s.isOutbound || undefined, outboundStrategy: s.outboundStrategy || undefined,
-          isRunning: s.isRunning || undefined, campaign: s.campaignName, isActive: s.isActive,
+          isRunning: s.isRunning, campaign: s.campaignName, isActive: s.isActive,
         })),
       };
     },
@@ -1014,7 +1014,7 @@ export const TOOLS = [
   },
   {
     name: 'outbound_overview',
-    description: 'One-call inventory of the outbound stack: every outbound skill with its running state, retry settings, dialing schedule, DNC groups, and calling lists. Run this before building or changing anything outbound, and reuse what already exists.',
+    description: 'One-call inventory of the outbound stack: outbound skills with their running state (isRunning true while dialing, false when stopped, missing when CXone does not report it), retry settings and dialing schedule for the first 20 outbound skills (truncated is true when there are more), DNC groups, and calling lists. Run this before building or changing anything outbound, and reuse what already exists.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async (cx) => {
       const [skills, dnc, lists] = await Promise.all([
@@ -1030,7 +1030,7 @@ export const TOOLS = [
         ]);
         return {
           skillId: s.skillId, name: s.skillName, strategy: s.outboundStrategy,
-          isRunning: Boolean(s.isRunning),
+          isRunning: s.isRunning,
           retry: retry ? { maximumAttempts: retry.maximumAttempts, minimumRetryMinutes: retry.minimumRetryMinutes } : undefined,
           schedule: schedule?.isScheduled
             ? DAYS_LOWER.filter((d) => schedule[`${d}IsActive`]).map((d) => `${d} ${schedule[`${d}StartTime`]}-${schedule[`${d}EndTime`]}`)
@@ -1039,6 +1039,8 @@ export const TOOLS = [
       }));
       return {
         outboundSkills: detail,
+        outboundSkillCount: outbound.length,
+        truncated: outbound.length > 20,
         dncGroups: (dnc.resultSet?.dncGroups || dnc.dncGroups || []).map((g) => ({ dncGroupId: Number(g.dncGroupId), name: g.dncGroupName })),
         callLists: (lists.resultSet?.callingLists || lists.callingLists || []).slice(0, 25),
       };

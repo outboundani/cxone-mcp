@@ -137,3 +137,23 @@ test('repoint sends back the fields it read, so only the script changes', async 
   await assert.rejects(callTool(noId.cfg, 'repoint_point_of_contact', { point_of_contact: 'Main line', script: 'New' }), /no numeric id|did not report a numeric id/);
   assert.equal(writes(noId).length, 0);
 });
+
+// ---------- running state ----------
+
+test('a skill whose running state CXone does not report is never shown as stopped', async () => {
+  const skills = [
+    { skillId: 1, skillName: 'Dialing', isOutbound: true, isRunning: true },
+    { skillId: 2, skillName: 'Stopped', isOutbound: true, isRunning: false },
+    { skillId: 3, skillName: 'Unknown', isOutbound: true },
+  ];
+  const list = await callTool(makeCxone({ skills }).cfg, 'list_skills', {});
+  assert.deepEqual(list.skills.map((s) => s.isRunning), [true, false, undefined]);
+  const overview = await callTool(makeCxone({ skills }).cfg, 'outbound_overview', {});
+  assert.deepEqual(overview.outboundSkills.map((s) => s.isRunning), [true, false, undefined]);
+  assert.equal(overview.truncated, false);
+  const many = Array.from({ length: 23 }, (_, i) => ({ skillId: i + 1, skillName: `S${i}`, isOutbound: true, isRunning: false }));
+  const big = await callTool(makeCxone({ skills: many }).cfg, 'outbound_overview', {});
+  assert.equal(big.outboundSkills.length, 20);
+  assert.equal(big.outboundSkillCount, 23);
+  assert.equal(big.truncated, true);
+});
