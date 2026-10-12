@@ -93,3 +93,30 @@ test('the client pins the URL it sends even if a cached session were tampered wi
   await assert.rejects(cx.get('skills'), /not an official NiCE CXone host/);
   assert.equal(fake.api().length, 0);
 });
+
+// ---------- time budget ----------
+
+test('a hanging CXone answer ends at the call budget; nothing sent means "nothing was changed"', async () => {
+  const slow = makeCxone({ hang: true });
+  const started = Date.now();
+  await assert.rejects(callTool({ ...slow.cfg, budgetMs: 300 }, 'list_skills', {}), (e) => e.code === 'time_limit' && /nothing was changed/.test(e.message));
+  assert.ok(Date.now() - started < 2000, 'aborted at the budget');
+});
+
+test('a time out after a write went out is reported as possibly completed, never as unchanged', async () => {
+  const fake = makeCxone({ hangMethods: ['POST'] });
+  await assert.rejects(callTool({ ...fake.cfg, budgetMs: 300 }, 'create_unavailable_code', { name: 'Huddle' }), (e) => {
+    assert.equal(e.code, 'time_limit');
+    assert.match(e.message, /may have completed/);
+    assert.doesNotMatch(e.message, /nothing was changed/);
+    return true;
+  });
+});
+
+test('the 429 backoff stops at the budget instead of sleeping past it', async () => {
+  const fake = makeCxone({ status: { 'GET skills': 429 } });
+  const started = Date.now();
+  await assert.rejects(callTool({ ...fake.cfg, budgetMs: 1000 }, 'list_skills', {}), (e) => e.code === 'time_limit');
+  assert.ok(Date.now() - started < 1500, 'did not sleep the 2 s backoff');
+  assert.equal(fake.api().length, 1);
+});

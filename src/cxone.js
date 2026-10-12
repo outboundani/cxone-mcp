@@ -60,6 +60,10 @@ export function officialApiHost(value) {
 }
 
 const ACD_VERSION = 'v30.0';
+// One time budget per tool call: every request, retry and wait shares it, so a
+// slow or hanging CXone answer ends the call cleanly instead of running until
+// the MCP client gives up.
+export const DEFAULT_BUDGET_MS = 25_000;
 
 export function decodeJwt(token) {
   try {
@@ -76,12 +80,43 @@ const sessionCache = new Map();
 
 export class CxoneClient {
   // fetch is optional (tests inject one); the global fetch is used otherwise.
-  constructor({ accessKeyId, accessKeySecret, apiBase, fetch }) {
+  // One client serves one tool call: budgetMs (or an absolute deadline) bounds it.
+  constructor({ accessKeyId, accessKeySecret, apiBase, fetch, budgetMs = DEFAULT_BUDGET_MS, deadline }) {
     this.accessKeyId = accessKeyId;
     this.accessKeySecret = accessKeySecret;
     this.apiBaseOverride = apiBase || '';
     this.fetch = typeof fetch === 'function' ? fetch : (...a) => globalThis.fetch(...a);
     this.cacheKey = `${accessKeyId}\n${this.apiBaseOverride}`;
+    this.deadline = Number.isFinite(deadline) ? deadline : Date.now() + budgetMs;
+    this.writeSent = false; // set once a POST, PUT or PATCH to the API has gone out
+  }
+
+  // Every request and every wait checks the budget.
+  checkBudget(extraMs = 0) {
+    if (Date.now() + extraMs > this.deadline) {
+      throw new CxoneError('Stopped at the time limit for one tool call. Steps before this point may have completed; check with a read tool before retrying.', 504, 'time_limit');
+    }
+  }
+
+  async sleep(ms) {
+    this.checkBudget(ms);
+    await new Promise((r) => setTimeout(r, ms));
+  }
+
+  // Every request carries the remaining budget as an abort signal, so one slow
+  // request cannot run past it. isWrite marks an API write: once one has gone
+  // out, a later failure has an unknown outcome.
+  async send(url, { isWrite = false, ...init } = {}) {
+    this.checkBudget();
+    if (isWrite) this.writeSent = true;
+    try {
+      return await this.fetch(url, { ...init, signal: AbortSignal.timeout(Math.max(1, this.deadline - Date.now())) });
+    } catch (e) {
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+        throw new CxoneError('Stopped at the time limit for one tool call: CXone did not answer in time. Steps before this point may have completed; check with a read tool before retrying.', 504, 'time_limit');
+      }
+      throw e;
+    }
   }
 
   async session() {
@@ -102,7 +137,7 @@ export class CxoneClient {
     let lastErr = null;
     for (const host of order) {
       try {
-        const res = await this.fetch(`https://${host}/authentication/v1/token/access-key`, {
+        const res = await this.send(`https://${host}/authentication/v1/token/access-key`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({ accessKeyId: this.accessKeyId, accessKeySecret: this.accessKeySecret }),
@@ -139,7 +174,7 @@ export class CxoneClient {
         sessionCache.set(this.cacheKey, session);
         return session;
       } catch (e) {
-        if (e instanceof CxoneError && e.code === 'unofficial_host') throw e;
+        if (e instanceof CxoneError && (e.code === 'unofficial_host' || e.code === 'time_limit')) throw e;
         lastErr = e instanceof CxoneError ? e : new CxoneError(`CXone login failed at ${host}: ${e.message}`, 0);
       }
     }
@@ -155,13 +190,16 @@ export class CxoneClient {
     const candidates = [];
     if (session.tenantId) {
       try {
-        const res = await this.fetch(`https://${DISCOVERY_HOST}/.well-known/cxone-configuration?tenantId=${encodeURIComponent(session.tenantId)}`, { headers: { Accept: 'application/json' } });
+        const res = await this.send(`https://${DISCOVERY_HOST}/.well-known/cxone-configuration?tenantId=${encodeURIComponent(session.tenantId)}`, { headers: { Accept: 'application/json' } });
         if (res.ok) {
           const cfg = await res.json();
           if (typeof cfg?.api_endpoint === 'string' && cfg.api_endpoint) candidates.push(cfg.api_endpoint.replace(/\/+$/, ''));
           else if (typeof cfg?.area === 'string' && typeof cfg?.domain === 'string') candidates.push(`api-${cfg.area}.${cfg.domain}`);
         }
-      } catch { /* fall through to the claims */ }
+      } catch (e) {
+        if (e?.code === 'time_limit') throw e;
+        /* fall through to the claims */
+      }
     }
     if (!candidates.length && session.area && session.domain) candidates.push(`api-${session.area}.${session.domain}`);
     if (!candidates.length && session.cluster) candidates.push(`api-${session.cluster}.nice-incontact.com`);
@@ -178,7 +216,8 @@ export class CxoneClient {
   // Core request helper for the ACD Admin API. `path` is relative to
   // /inContactAPI/services/vXX.0/ (e.g. "skills" or "scripts/search").
   // Retries once on 401 (stale token) and backs off twice on 429 (CXone
-  // sends no reliable Retry-After, so exponential: 2s then 6s).
+  // sends no reliable Retry-After, so exponential: 2s then 6s), within the
+  // budget: a backoff that would run past it stops instead.
   async api(method, path, { body, query, version, _attempt = 0 } = {}) {
     const s = await this.session();
     const rel = String(path).replace(/^\/+/, '');
@@ -199,8 +238,9 @@ export class CxoneClient {
     for (const [k, v] of Object.entries(query || {})) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
-    const res = await this.fetch(url, {
+    const res = await this.send(url, {
       method,
+      isWrite: method !== 'GET',
       headers: {
         Authorization: `Bearer ${s.token}`,
         // CXone answers "No known way to render data" without an Accept
@@ -216,7 +256,7 @@ export class CxoneClient {
       return this.api(method, path, { body, query, version, _attempt: 1 });
     }
     if (res.status === 429 && _attempt < 2) {
-      await new Promise((r) => setTimeout(r, _attempt === 0 ? 2000 : 6000));
+      await this.sleep(_attempt === 0 ? 2000 : 6000);
       return this.api(method, path, { body, query, version, _attempt: _attempt + 1 });
     }
     if (res.status === 204) return { ok: true };

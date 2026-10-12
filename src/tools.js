@@ -57,7 +57,7 @@ async function resolveSkill(cx, ref) {
     const wide = entities.filter((s) => s.skillName?.toLowerCase().includes(String(ref).toLowerCase()));
     if (wide.length === 1) return wide[0];
     if (wide.length > 1) throw new CxoneError(`Ambiguous skill "${ref}" - matches: ${wide.map((s) => s.skillName).join(', ')}`, 409);
-    if (attempt === 0) await new Promise((r) => setTimeout(r, 2500));
+    if (attempt === 0) await cx.sleep(2500);
   }
   throw new CxoneError(`No skill found matching "${ref}"`, 404);
 }
@@ -1143,7 +1143,15 @@ export async function callTool(cfg, name, args = {}) {
     throw new CxoneError('This server is not connected to CXone yet - open /setup, or set the CXONE_ACCESS_KEY_ID / CXONE_ACCESS_KEY_SECRET secrets.', 503);
   }
   const cx = new CxoneClient(cfg);
-  return tool.handler(cx, args, cfg);
+  try {
+    return await tool.handler(cx, args, cfg);
+  } catch (e) {
+    // Out of time before any write went out: nothing changed, so say so plainly.
+    if (e?.code === 'time_limit' && !cx.writeSent) {
+      throw new CxoneError('The call ran out of time before anything was sent to CXone, so nothing was changed. Try again in a moment.', 504, 'time_limit');
+    }
+    throw e;
+  }
 }
 
 // UI metadata - which tools are writes, and how they group on the landing page.
