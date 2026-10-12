@@ -56,3 +56,29 @@ test('upload_call_list uploads nothing when the list create returns no id', asyn
   await assert.rejects(callTool(fake.cfg, 'upload_call_list', { name: 'L', skill: 'Reactivation', records: [{ phone: '5551234567' }] }), /no list id/);
   assert.ok(!fake.api().some((r) => r.path.includes('/upload')));
 });
+
+// ---------- configure_outbound_skill ----------
+
+const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+
+test('configure_outbound_skill checks every argument before the first write (no half-applied change)', async () => {
+  const bad = [
+    { max_attempts: 3, schedule: [{ days: WEEKDAYS, start: '09:00', end: '19:00' }] }, // weekend missing
+    { max_attempts: 3, schedule: [{ days: [...WEEKDAYS, 'saturday', 'sunday'], start: '9am', end: '19:00' }] },
+    { minimum_retry_minutes: 30, schedule: [{ days: [...WEEKDAYS, 'saturday', 'sunday'], start: '10:00', end: '10:00' }] },
+    { max_attempts: 0 },
+    { max_attempts: 2.5 },
+    { max_attempts: 301 },
+    { minimum_retry_minutes: -5 },
+    {},
+  ];
+  for (const extra of bad) {
+    const fake = makeCxone({ skills: SKILLS });
+    await assert.rejects(callTool(fake.cfg, 'configure_outbound_skill', { skill: 'Reactivation', ...extra }), (e) => e.status === 400, JSON.stringify(extra));
+    assert.equal(fake.api().filter((r) => r.method !== 'GET').length, 0, JSON.stringify(extra));
+  }
+  const ok = makeCxone({ skills: SKILLS });
+  const res = await callTool(ok.cfg, 'configure_outbound_skill', { skill: 'Reactivation', max_attempts: 3, schedule: [{ days: [...WEEKDAYS, 'saturday', 'sunday'], start: '09:00', end: '19:00' }] });
+  assert.equal(res.retrySettings.maximumAttempts, 3);
+  assert.deepEqual(ok.api().filter((r) => r.method === 'PUT').map((r) => r.path.split('/').pop()), ['retry-settings', 'schedule-settings']);
+});

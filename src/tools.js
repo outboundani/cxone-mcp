@@ -266,8 +266,8 @@ export const TOOLS = [
       type: 'object',
       properties: {
         skill: { type: 'string', description: 'Outbound skill name or id' },
-        max_attempts: { type: 'number', description: 'Max dial attempts per record (1-300)' },
-        minimum_retry_minutes: { type: 'number', description: 'Minimum minutes between attempts on a record' },
+        max_attempts: { type: 'number', description: 'Max dial attempts per record, a whole number 1-300' },
+        minimum_retry_minutes: { type: 'number', description: 'Minimum minutes between attempts on a record, a whole number of at least 1' },
         schedule: {
           type: 'array',
           description: 'Weekly dialing windows covering ALL 7 days, e.g. [{"days":["monday","tuesday","wednesday","thursday","friday"],"start":"09:00","end":"19:00"},{"days":["saturday","sunday"],"start":"10:00","end":"16:00"}]. The CXone API requires every day to have a window; for days that should not dial, leave schedule unset and use the CXone UI.',
@@ -287,19 +287,22 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const { skillId, skillName } = await resolveSkill(cx, a.skill);
-      const out = { skill: skillName || skillId };
-      if (a.max_attempts || a.minimum_retry_minutes) {
-        const retrySettings = {};
-        if (a.max_attempts) retrySettings.maximumAttempts = a.max_attempts;
-        if (a.minimum_retry_minutes) retrySettings.minimumRetryMinutes = a.minimum_retry_minutes;
-        await cx.put(`skills/${skillId}/parameters/retry-settings`, { retrySettings });
-        out.retrySettings = retrySettings;
+      // Every argument is checked BEFORE any write: a bad schedule must not
+      // leave the retry settings already changed.
+      const hasRetry = a.max_attempts !== undefined || a.minimum_retry_minutes !== undefined;
+      const hasSchedule = Array.isArray(a.schedule) && a.schedule.length > 0;
+      if (!hasRetry && !hasSchedule) throw new CxoneError('Nothing to configure - pass max_attempts, minimum_retry_minutes, and/or schedule.', 400);
+      if (a.max_attempts !== undefined && !(Number.isInteger(a.max_attempts) && a.max_attempts >= 1 && a.max_attempts <= 300)) {
+        throw new CxoneError('max_attempts must be a whole number from 1 to 300', 400);
       }
-      if (a.schedule?.length) {
+      if (a.minimum_retry_minutes !== undefined && !(Number.isInteger(a.minimum_retry_minutes) && a.minimum_retry_minutes >= 1)) {
+        throw new CxoneError('minimum_retry_minutes must be a whole number of at least 1', 400);
+      }
+      if (hasSchedule) {
         for (const w of a.schedule) {
-          if (!HHMM(w.start) || !HHMM(w.end)) throw new CxoneError('schedule start/end must be 24h HH:MM', 400);
+          if (!HHMM(w?.start) || !HHMM(w?.end)) throw new CxoneError('schedule start/end must be 24h HH:MM', 400);
           if (w.start === w.end) throw new CxoneError(`schedule window ${w.start}-${w.end} is zero-length - the CXone API rejects it`, 400);
+          if (!Array.isArray(w.days)) throw new CxoneError('each schedule window needs a days array', 400);
         }
         const covered = DAYS_LOWER.filter((d) => a.schedule.some((w) => w.days.includes(d)));
         if (covered.length < 7) {
@@ -308,6 +311,17 @@ export const TOOLS = [
             `The CXone schedule API only accepts a schedule where all 7 days have an active window (verified: any inactive day is rejected as InvalidParameter, however encoded). ` +
             `Missing: ${missing.join(', ')}. Either give every day a window, or skip schedule here and set the partial week in CXone (ACD > Contact Settings > Skills > Schedule).`, 400);
         }
+      }
+      const { skillId, skillName } = await resolveSkill(cx, a.skill);
+      const out = { skill: skillName || skillId };
+      if (hasRetry) {
+        const retrySettings = {};
+        if (a.max_attempts !== undefined) retrySettings.maximumAttempts = a.max_attempts;
+        if (a.minimum_retry_minutes !== undefined) retrySettings.minimumRetryMinutes = a.minimum_retry_minutes;
+        await cx.put(`skills/${skillId}/parameters/retry-settings`, { retrySettings });
+        out.retrySettings = retrySettings;
+      }
+      if (hasSchedule) {
         const scheduleSettings = { isScheduled: true };
         for (const day of DAYS_LOWER) {
           const w = a.schedule.find((x) => x.days.includes(day));
@@ -318,7 +332,6 @@ export const TOOLS = [
         await cx.put(`skills/${skillId}/parameters/schedule-settings`, { scheduleSettings });
         out.scheduleSettings = scheduleSettings;
       }
-      if (!out.retrySettings && !out.scheduleSettings) throw new CxoneError('Nothing to configure - pass max_attempts, minimum_retry_minutes, and/or schedule.', 400);
       out.note = 'Dialer behavior configured. The skill still only dials once a human starts it.';
       return out;
     },
