@@ -17,7 +17,7 @@ function stub() {
     return reply({ agentId: 5, userName: 'a', password: 'hunter2', nested: { apiKey: 'k' } });
   };
   // A fresh access key per test keeps the module-level session cache apart.
-  const cfg = { configured: true, accessKeyId: `test-key-${++keyN}`, accessKeySecret: 's', apiBase: 'https://api-test.example' };
+  const cfg = { configured: true, accessKeyId: `test-key-${++keyN}`, accessKeySecret: 's', apiBase: 'https://api-test.niceincontact.com' };
   return { state, cfg };
 }
 

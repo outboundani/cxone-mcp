@@ -31,7 +31,7 @@ The IVR builder composes the real web-Studio script JSON, shows you the flow as 
 2. **Create a CXone access key**: Admin → Employees → (a dedicated least-privilege admin user) → Security tab → **Add Access Key**. Copy the ID and Secret (the secret is shown once).
 3. **Configure**: open `/setup` on your new Worker and paste the Access Key ID and Secret. That's it - the wizard validates them live against CXone, discovers your tenant and regional API host automatically (no cluster names, no API URLs), then hands you your access key for MCP clients (shown once).
 
-Prefer terminal-managed config? Set Wrangler secrets instead; they override the wizard: `CXONE_ACCESS_KEY_ID`, `CXONE_ACCESS_KEY_SECRET`, `MCP_AUTH_TOKEN` (and optionally `CXONE_API_BASE` for private clusters).
+Prefer terminal-managed config? Set Wrangler secrets instead; they override the wizard: `CXONE_ACCESS_KEY_ID`, `CXONE_ACCESS_KEY_SECRET`, `MCP_AUTH_TOKEN` (and optionally `CXONE_API_BASE` to skip discovery; it must be an official NiCE CXone API host such as `https://api-na1.niceincontact.com`).
 
 ## Connect your AI
 
@@ -73,6 +73,7 @@ CXone names things differently than Five9 or Genesys, and the server teaches you
 
 - **Zero dependencies.** Not one npm package. The Worker is plain JS on `fetch` and Web Crypto.
 - **Two-field setup.** Auth is CXone's User Hub access-key flow; the token's own claims name the tenant, and the public `.well-known/cxone-configuration` endpoint maps it to the regional API host. Paste two keys, everything else is discovered.
+- **The API host is pinned.** Whether it comes from `CXONE_API_BASE`, the discovery endpoint, or the token claims, the regional host must be an official NiCE CXone API host (`api-<area>` on `niceincontact.com`, `nice-incontact.com` or `incontact.com`), or nothing is sent to it, least of all the bearer token. Sign-in tries the documented access-key areas (na1, eu1, au1) plus `cxone.niceincontact.com`, the configured area first; FedRAMP tenants are not supported. Login errors never echo CXone's response body.
 - **The IVR builder writes the real web-Studio JSON** (`header`, `actions`, `properties`, `branches`) against CXone's global action library (BEGIN, MENU, PLAY, REQAGENT, MUSIC, HANGUP - the GUIDs are product constants, identical on every tenant), and saves through `POST /scripts` - the same endpoint web Studio itself saves through. CXone's server-side SYNTAX_CHECK validates every save and its errors/warnings are relayed verbatim. Menus nest three levels deep with back-navigation.
 - **Round-trip editing.** `get_script` returns the same JSON shape `deploy_script` accepts, so read-modify-deploy works on any web-Studio script.
 - **Any script diagrams.** Web-Studio scripts render from their JSON; Desktop-Studio-only scripts fall back to a best-effort render of their XML export. Instant documentation either way.

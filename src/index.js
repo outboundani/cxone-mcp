@@ -1,7 +1,7 @@
 // cxone-mcp - an MCP server (streamable HTTP, stateless) for NiCE CXone,
 // running on Cloudflare Workers with zero dependencies.
 
-import { CxoneError, CxoneClient } from './cxone.js';
+import { CxoneError, CxoneClient, officialApiHost } from './cxone.js';
 import { toolDefs, callTool } from './tools.js';
 import { handleOAuth, checkAuth, unauthorized } from './oauth.js';
 import { INSTRUCTIONS } from './about.js';
@@ -85,8 +85,14 @@ async function handleSetup(request, env, cfg) {
 
   const accessKeyId = String(body.access_key_id || '').trim();
   const accessKeySecret = String(body.access_key_secret || '').trim();
-  const apiBase = String(body.api_base || '').trim().replace(/\/+$/, '');
+  const rawApiBase = String(body.api_base || '').trim();
   if (!accessKeyId || !accessKeySecret) return json({ error: 'Access Key ID and Access Key Secret are required.' }, 400);
+  // The API base receives the bearer token, so only official NiCE CXone API hosts are accepted.
+  const apiHost = rawApiBase ? officialApiHost(rawApiBase) : null;
+  if (rawApiBase && !apiHost) {
+    return json({ error: 'API base must be an official NiCE CXone API host such as https://api-na1.niceincontact.com, or left empty to discover it.' }, 400);
+  }
+  const apiBase = apiHost ? `https://${apiHost}` : '';
 
   // Validate the credentials against CXone before saving anything - and
   // discover the tenant while we're at it.
