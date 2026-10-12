@@ -127,3 +127,13 @@ test('repoint_point_of_contact matches a formatted number by digits', async () =
   assert.equal(res.repointed, true);
   assert.equal(writes(fake)[0].path, '/inContactAPI/services/v30.0/points-of-contact/12');
 });
+
+test('repoint sends back the fields it read, so only the script changes', async () => {
+  const pocs = [{ pointOfContactId: 12, pointOfContact: '5551234567', pointOfContactName: 'Main line', scriptName: 'Old', skillId: 7, isActive: true, ivrReportingEnabled: false }];
+  const fake = makeCxone({ pocs, scripts: ['New'] });
+  await callTool(fake.cfg, 'repoint_point_of_contact', { point_of_contact: 'Main line', script: 'New' });
+  assert.deepEqual(JSON.parse(writes(fake)[0].body), { scriptName: 'New', pointOfContactName: 'Main line', skillId: 7, isActive: true, ivrReportingEnabled: false });
+  const noId = makeCxone({ pocs: [{ pointOfContactName: 'Main line', scriptName: 'Old', isActive: true }], scripts: ['New'] });
+  await assert.rejects(callTool(noId.cfg, 'repoint_point_of_contact', { point_of_contact: 'Main line', script: 'New' }), /no numeric id|did not report a numeric id/);
+  assert.equal(writes(noId).length, 0);
+});

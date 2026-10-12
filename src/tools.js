@@ -690,7 +690,15 @@ export const TOOLS = [
       const poc = matches[0];
       if (!/^\d+$/.test(String(poc.pointOfContactId ?? ''))) throw new CxoneError('CXone did not report a numeric id for that point of contact, so it was not changed.', 502);
       const script = await resolveScript(cx, a.script);
-      await cx.put(`points-of-contact/${poc.pointOfContactId}`, { scriptName: script.scriptName });
+      // PUT replaces the point of contact (the API requires name, skill and
+      // script). Send back what was read for every other field, so a repoint
+      // only changes the script: an omitted isActive or skillId must not reset
+      // a live number.
+      const body = { scriptName: script.scriptName };
+      if (typeof poc.pointOfContactName === 'string' && poc.pointOfContactName) body.pointOfContactName = poc.pointOfContactName;
+      for (const k of ['skillId', 'chatProfileId']) if (/^\d+$/.test(String(poc[k] ?? ''))) body[k] = Number(poc[k]);
+      for (const k of ['isActive', 'ivrReportingEnabled']) if (typeof poc[k] === 'boolean') body[k] = poc[k];
+      await cx.put(`points-of-contact/${poc.pointOfContactId}`, body);
       return { repointed: true, pointOfContact: poc.pointOfContactName, contactAddress: poc.pointOfContact, from: poc.scriptName, to: script.scriptName };
     },
   },
