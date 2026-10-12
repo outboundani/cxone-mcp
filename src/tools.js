@@ -45,20 +45,28 @@ function batchResult(res, key, what) {
   return item || {};
 }
 
-async function resolveSkill(cx, ref) {
+// Writes act only on the object the caller named: an exact name (any case)
+// or an id. A unique partial match is suggested, never silently used, so
+// "Sales" cannot change "Sales Outbound". Reads pass { fuzzy: true } and keep
+// the convenience of a unique substring match.
+async function resolveSkill(cx, ref, { fuzzy = false } = {}) {
   if (/^\d+$/.test(String(ref))) return { skillId: Number(ref), skillName: String(ref) };
+  const q = String(ref).toLowerCase();
+  let near = [];
   // One retry with a short wait: a just-created skill can lag the list by a
   // few seconds on some clusters.
   for (let attempt = 0; attempt < 2; attempt++) {
     const { entities } = await cx.listAll('skills', 'skills', {}, { max: 1000 });
-    const matches = entities.filter((s) => s.skillName?.toLowerCase() === String(ref).toLowerCase());
+    const matches = entities.filter((s) => s.skillName?.toLowerCase() === q);
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) throw new CxoneError(`Ambiguous skill "${ref}" - use the skillId.`, 409);
-    const wide = entities.filter((s) => s.skillName?.toLowerCase().includes(String(ref).toLowerCase()));
-    if (wide.length === 1) return wide[0];
-    if (wide.length > 1) throw new CxoneError(`Ambiguous skill "${ref}" - matches: ${wide.map((s) => s.skillName).join(', ')}`, 409);
+    near = entities.filter((s) => s.skillName?.toLowerCase().includes(q));
+    if (fuzzy && near.length === 1) return near[0];
+    if (fuzzy && near.length > 1) throw new CxoneError(`Ambiguous skill "${ref}" - matches: ${near.map((s) => s.skillName).join(', ')}`, 409);
     if (attempt === 0) await cx.sleep(2500);
   }
+  if (near.length === 1) throw new CxoneError(`No skill is named exactly "${ref}". Did you mean "${near[0].skillName}"? Pass its exact name or skillId.`, 404);
+  if (near.length > 1) throw new CxoneError(`No skill is named exactly "${ref}" - partial matches: ${near.slice(0, 8).map((s) => s.skillName).join(', ')}. Pass the exact name or skillId.`, 409);
   throw new CxoneError(`No skill found matching "${ref}"`, 404);
 }
 
@@ -85,16 +93,24 @@ async function resolveTeam(cx, ref) {
   throw new CxoneError(`No team found matching "${ref}"`, 404);
 }
 
-async function resolveScript(cx, ref) {
-  const search = await cx.get('scripts/search', /^\d+$/.test(String(ref)) ? {} : { scriptName: ref });
-  const rows = (search.scriptSearchDetails || []).filter((s) => s.status === 'CURR');
-  const matches = /^\d+$/.test(String(ref))
-    ? (search.scriptSearchDetails || []).filter((s) => String(s.masterID) === String(ref))
-    : rows.filter((s) => s.scriptName?.toLowerCase() === String(ref).toLowerCase());
-  const found = matches.length ? matches : rows;
-  if (!found.length) throw new CxoneError(`No script found matching "${ref}"`, 404);
-  if (found.length > 1) throw new CxoneError(`Ambiguous script "${ref}" - matches: ${found.map((s) => s.scriptName).join(', ')}`, 409);
-  return found[0];
+async function resolveScript(cx, ref, { fuzzy = false } = {}) {
+  const byId = /^\d+$/.test(String(ref));
+  const search = await cx.get('scripts/search', byId ? {} : { scriptName: ref });
+  const all = Array.isArray(search?.scriptSearchDetails) ? search.scriptSearchDetails : [];
+  const rows = all.filter((s) => s.status === 'CURR');
+  if (byId) {
+    // An id that matches nothing is "not found", never "whichever script exists".
+    const hit = all.filter((s) => String(s.masterID) === String(ref));
+    if (!hit.length) throw new CxoneError(`No script found with id ${ref}`, 404);
+    return hit[0];
+  }
+  const matches = rows.filter((s) => s.scriptName?.toLowerCase() === String(ref).toLowerCase());
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) throw new CxoneError(`Ambiguous script "${ref}" - use the script id.`, 409);
+  if (!rows.length) throw new CxoneError(`No script found matching "${ref}"`, 404);
+  if (fuzzy && rows.length === 1) return rows[0];
+  if (rows.length === 1) throw new CxoneError(`No script is named exactly "${ref}". Did you mean "${rows[0].scriptName}"? Pass its exact name (folder included) or id.`, 404);
+  throw new CxoneError(`Ambiguous script "${ref}" - matches: ${rows.slice(0, 8).map((s) => s.scriptName).join(', ')}`, 409);
 }
 
 async function resolveCampaign(cx, ref) {
@@ -104,6 +120,7 @@ async function resolveCampaign(cx, ref) {
   return m;
 }
 
+const digitsOf = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d.length === 11 && d.startsWith('1') ? d.slice(1) : d; };
 const HHMM = (s) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(s));
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_LOWER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -199,7 +216,7 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const { skillId } = await resolveSkill(cx, a.skill);
+      const { skillId } = await resolveSkill(cx, a.skill, { fuzzy: true });
       const full = await cx.get(`skills/${skillId}`);
       const skill = full.skills?.[0] || full;
       let parameters;
@@ -406,14 +423,16 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
+      // Resolve every skill BEFORE the create, so a bad name leaves no
+      // half-built campaign behind.
+      const ids = [];
+      for (const s of a.skills || []) ids.push((await resolveSkill(cx, s)).skillId);
       // The flat create body lives on v33.0 (older versions want a different
       // wrapper and 500 on this shape).
       const res = await cx.post('campaigns', { name: a.name, isActive: true, ...(a.description ? { description: a.description } : {}) }, { version: 'v33.0' });
       const campaignId = res.id ?? res.campaignId;
       let assigned = [];
-      if (a.skills?.length) {
-        const ids = [];
-        for (const s of a.skills) ids.push((await resolveSkill(cx, s)).skillId);
+      if (ids.length) {
         await cx.post(`campaigns/${campaignId}/skills`, { skills: ids.map((skillId) => ({ skillId })) });
         assigned = ids;
       }
@@ -488,13 +507,14 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
+      // Resolve every agent BEFORE the create (see create_campaign).
+      const ids = [];
+      for (const ref of a.agents || []) ids.push((await resolveAgent(cx, ref)).agentId);
       const res = await cx.post('teams', { teams: [{ teamName: a.name, isActive: true }] });
       const created = batchResult(res, 'teamsResults', 'team');
       const teamId = created.teamId ?? res.teams?.[0]?.teamId;
       let moved = 0;
-      if (a.agents?.length && teamId) {
-        const ids = [];
-        for (const ref of a.agents) ids.push((await resolveAgent(cx, ref)).agentId);
+      if (ids.length && teamId) {
         await cx.post(`teams/${teamId}/agents`, { agentIds: ids });
         moved = ids.length;
       }
@@ -658,11 +678,17 @@ export const TOOLS = [
     handler: async (cx, a) => {
       const r = await cx.get('points-of-contact');
       const rows = r.resultSet?.pointsOfContact || r.pointsOfContact || [];
-      const q = String(a.point_of_contact).toLowerCase();
-      const matches = rows.filter((p) => String(p.pointOfContactId) === q || p.pointOfContact?.toLowerCase() === q || p.pointOfContactName?.toLowerCase() === q);
+      const raw = String(a.point_of_contact).trim();
+      const q = raw.toLowerCase();
+      // A phone-shaped reference also matches by digits, so "+1 (555) 123-4567"
+      // finds a stored 5551234567 (a leading country code 1 is ignored on both sides).
+      const byDigits = /^\+?[\d\s().-]{7,}$/.test(raw) && raw.replace(/\D/g, '').length >= 7 ? digitsOf(raw) : null;
+      const matches = rows.filter((p) => p && (String(p.pointOfContactId) === q || String(p.pointOfContact ?? '').toLowerCase() === q
+        || String(p.pointOfContactName ?? '').toLowerCase() === q || (byDigits && digitsOf(p.pointOfContact) === byDigits)));
       if (!matches.length) throw new CxoneError(`No point of contact found matching "${a.point_of_contact}"`, 404);
       if (matches.length > 1) throw new CxoneError(`Ambiguous point of contact - matches: ${matches.map((p) => p.pointOfContactName).join(', ')}`, 409);
       const poc = matches[0];
+      if (!/^\d+$/.test(String(poc.pointOfContactId ?? ''))) throw new CxoneError('CXone did not report a numeric id for that point of contact, so it was not changed.', 502);
       const script = await resolveScript(cx, a.script);
       await cx.put(`points-of-contact/${poc.pointOfContactId}`, { scriptName: script.scriptName });
       return { repointed: true, pointOfContact: poc.pointOfContactName, contactAddress: poc.pointOfContact, from: poc.scriptName, to: script.scriptName };
@@ -847,17 +873,25 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
+      // Validate numbers and resolve scrub skills BEFORE the create.
+      if (a.numbers?.length > 100) throw new CxoneError('Max 100 numbers per call - send the rest in another call', 400);
+      const numbers = (a.numbers || []).map((n) => {
+        const d = String(n).replace(/\D/g, '');
+        if (d.length < 10 || d.length > 15) throw new CxoneError(`DNC number "${String(n).slice(0, 30)}" must have 10 to 15 digits`, 400);
+        return Number(d);
+      });
+      const toScrub = [];
+      for (const s of a.scrub_skills || []) toScrub.push(await resolveSkill(cx, s));
       const res = await cx.post('dnc-groups', { dncGroupName: a.name, ...(a.description ? { dncGroupDescription: a.description } : {}) });
       const dncGroupId = res.dncGroups?.[0]?.dncGroupId ?? res.dncGroupId;
       let numbersAdded = 0;
       const scrubbed = [];
-      if (a.numbers?.length) {
-        if (a.numbers.length > 100) throw new CxoneError('Max 100 numbers per call - send the rest in another call', 400);
-        await cx.post(`dnc-groups/${dncGroupId}/records`, { dncGroupRecords: a.numbers.map((n) => ({ phoneNumber: Number(String(n).replace(/\D/g, '')) })) });
-        numbersAdded = a.numbers.length;
+      if (dncGroupId === undefined || dncGroupId === null) throw new CxoneError('CXone created the DNC group but returned no id, so no numbers or skills were attached. Check list_dnc_groups.', 502);
+      if (numbers.length) {
+        await cx.post(`dnc-groups/${dncGroupId}/records`, { dncGroupRecords: numbers.map((phoneNumber) => ({ phoneNumber })) });
+        numbersAdded = numbers.length;
       }
-      for (const s of a.scrub_skills || []) {
-        const { skillId, skillName } = await resolveSkill(cx, s);
+      for (const { skillId, skillName } of toScrub) {
         await cx.post(`dnc-groups/${dncGroupId}/scrubbed-skills/${skillId}`);
         scrubbed.push(skillName || skillId);
       }
@@ -1038,7 +1072,7 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const s = await resolveScript(cx, a.script);
+      const s = await resolveScript(cx, a.script, { fuzzy: true });
       try {
         const json = await cx.get('scripts', { scriptPath: s.scriptName });
         if (json.header) return { format: 'json', script: json };
@@ -1058,7 +1092,7 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const s = await resolveScript(cx, a.script);
+      const s = await resolveScript(cx, a.script, { fuzzy: true });
       try {
         const json = await cx.get('scripts', { scriptPath: s.scriptName });
         if (json.header) return { script: s.scriptName, source: 'web Studio JSON', mermaid: scriptJsonToMermaid(json), note: 'Render the mermaid diagram for the user.' };
@@ -1129,7 +1163,7 @@ export const TOOLS = [
       additionalProperties: false,
     },
     handler: async (cx, a) => {
-      const s = await resolveScript(cx, a.script);
+      const s = await resolveScript(cx, a.script, { fuzzy: true });
       const res = await cx.get('scripts/historyByName', { scriptPath: s.scriptName });
       const rows = res.scriptHistory || res.resultSet?.scriptHistory || res;
       return { script: s.scriptName, history: rows };

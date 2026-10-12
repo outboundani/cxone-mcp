@@ -82,3 +82,48 @@ test('configure_outbound_skill checks every argument before the first write (no 
   assert.equal(res.retrySettings.maximumAttempts, 3);
   assert.deepEqual(ok.api().filter((r) => r.method === 'PUT').map((r) => r.path.split('/').pop()), ['retry-settings', 'schedule-settings']);
 });
+
+// ---------- exact references for writes ----------
+
+const writes = (fake) => fake.api().filter((r) => r.method !== 'GET');
+
+test('a write never acts on a skill it only partially matched', async () => {
+  const skills = [{ skillId: 9, skillName: 'Sales Outbound', isOutbound: true }];
+  const fake = makeCxone({ skills });
+  await assert.rejects(callTool(fake.cfg, 'configure_outbound_skill', { skill: 'Sales', max_attempts: 3 }), /Did you mean "Sales Outbound"/);
+  assert.equal(writes(fake).length, 0);
+  // The exact name (any case) and the id still work; reads keep the partial match.
+  const ok = makeCxone({ skills });
+  await callTool(ok.cfg, 'configure_outbound_skill', { skill: 'sales outbound', max_attempts: 3 });
+  assert.equal(writes(ok)[0].path, '/inContactAPI/services/v30.0/skills/9/parameters/retry-settings');
+  const read = makeCxone({ skills, raw: { 'GET skills/9': { skills: [skills[0]] } } });
+  const got = await callTool(read.cfg, 'get_skill', { skill: 'Sales' });
+  assert.equal(got.skill.skillId, 9);
+});
+
+test('a write never acts on a script it only partially matched, or on any script when the id is unknown', async () => {
+  const pocs = [{ pointOfContactId: 12, pointOfContact: '5551234567', pointOfContactName: 'Main line', scriptName: 'Old', skillId: 7, isActive: true }];
+  const partial = makeCxone({ pocs, scripts: ['Main IVR v2'] });
+  await assert.rejects(callTool(partial.cfg, 'repoint_point_of_contact', { point_of_contact: 'Main line', script: 'Main IVR' }), /Did you mean "Main IVR v2"/);
+  assert.equal(writes(partial).length, 0);
+  const byId = makeCxone({ pocs, scripts: ['Only Script'] });
+  await assert.rejects(callTool(byId.cfg, 'repoint_point_of_contact', { point_of_contact: 'Main line', script: '99' }), /No script found with id 99/);
+  assert.equal(writes(byId).length, 0);
+});
+
+test('multi-step creates resolve every reference before the first write', async () => {
+  const camp = makeCxone({ skills: SKILLS });
+  await assert.rejects(callTool(camp.cfg, 'create_campaign', { name: 'Q4', skills: ['Nope'] }), /No skill found/);
+  assert.equal(writes(camp).length, 0, 'no campaign left behind without its skills');
+  const dnc = makeCxone({ skills: SKILLS });
+  await assert.rejects(callTool(dnc.cfg, 'create_dnc_group', { name: 'Internal', numbers: ['5551234567', 'call me'] }), /must have 10 to 15 digits/);
+  assert.equal(dnc.api().length, 0);
+});
+
+test('repoint_point_of_contact matches a formatted number by digits', async () => {
+  const pocs = [{ pointOfContactId: 12, pointOfContact: '5551234567', pointOfContactName: 'Main line', scriptName: 'Old', skillId: 7, isActive: true }];
+  const fake = makeCxone({ pocs, scripts: ['New'] });
+  const res = await callTool(fake.cfg, 'repoint_point_of_contact', { point_of_contact: '+1 (555) 123-4567', script: 'New' });
+  assert.equal(res.repointed, true);
+  assert.equal(writes(fake)[0].path, '/inContactAPI/services/v30.0/points-of-contact/12');
+});
