@@ -15,7 +15,10 @@
 // Save-endpoint realities, learned the hard way and honored here:
 //   - every action MUST carry integer xws/yws workspace coordinates (the GET
 //     shape omits them; the POST validator demands them per action)
-//   - custom DTMF branches are {type: "case", label: "<digit>"}
+//   - custom DTMF branches are {type: "custom", label: "<digit>"}. A "case"
+//     type passes the syntax check but CXone silently drops the branch on save
+//     (every menu then loops on its default branch); verified 2026-10-28 by a
+//     save-and-read-back on a live tenant.
 //   - the script NAME is the identity: saving an existing name overwrites
 //     (a new masterID is minted; history survives)
 
@@ -212,23 +215,23 @@ export function specToScript(spec, busNo, resolveSkill = (s) => s) {
     for (const c of menu.choices) {
       const digit = String(c.digit);
       if (c.action === 'hangup') {
-        wire(menuId, ensureHangup(), digit, 'case');
+        wire(menuId, ensureHangup(), digit, 'custom');
         continue;
       }
       if (c.action === 'previous_menu') {
-        wire(menuId, parentMenuId, digit, 'case');
+        wire(menuId, parentMenuId, digit, 'custom');
         continue;
       }
       if (c.action === 'play_message') {
         const play = add('PLAY', c.name || 'Info', PROPS.PLAY(c.message), col + 1);
-        wire(menuId, play, digit, 'case');
+        wire(menuId, play, digit, 'custom');
         if ((c.then || 'return_to_menu') === 'hangup') wire(play, ensureHangup());
         else wire(play, menuId);
         continue;
       }
       if (c.action === 'submenu') {
         const subId = addMenu(c.menu, depth + 1, menuId, c.name || `Submenu ${digit}`);
-        wire(menuId, subId, digit, 'case');
+        wire(menuId, subId, digit, 'custom');
         continue;
       }
       // transfer_to_skill: optional pre-transfer TTS, queue on the skill,
@@ -245,7 +248,7 @@ export function specToScript(spec, busNo, resolveSkill = (s) => s) {
         target = req;
       }
       const hold = add('MUSIC', 'Hold Music', PROPS.MUSIC(c.hold_music_seconds), col + 2);
-      wire(menuId, target, digit, 'case');
+      wire(menuId, target, digit, 'custom');
       wire(req, hold);
       wire(hold, hold);
     }

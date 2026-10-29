@@ -71,7 +71,7 @@ test('specToScript composes a valid scriptContent', () => {
   }
   // the menu wires a case branch per digit
   const menuId = actions.find((a) => a.name === 'MENU').actionId;
-  const cases = s.branches[menuId].filter((b) => b.type === 'case');
+  const cases = s.branches[menuId].filter((b) => b.type === 'custom');
   assert.deepEqual(cases.map((b) => b.label).sort(), ['1', '2', '3', '9']);
   // every REQAGENT default branch is wired (to hold music)
   for (const a of actions.filter((x) => x.name === 'REQAGENT')) {
@@ -190,9 +190,9 @@ test('specToScript composes submenus, pre-transfer, and back-branches', () => {
   assert.equal(s.branches[pre.actionId][0].to, sales.actionId);
   // main menu case 2 goes to the submenu; submenu case 9 comes back
   const [main, sub] = menus.map((m) => m.actionId).sort((a, b) => a - b);
-  const mainCases = s.branches[main].filter((b) => b.type === 'case');
+  const mainCases = s.branches[main].filter((b) => b.type === 'custom');
   assert.ok(mainCases.some((b) => b.label === '2' && b.to === sub));
-  const subCases = s.branches[sub].filter((b) => b.type === 'case');
+  const subCases = s.branches[sub].filter((b) => b.type === 'custom');
   assert.ok(subCases.some((b) => b.label === '9' && b.to === main));
   // play_message inside the submenu returns to the SUBMENU, not the main menu
   const info = actions.find((a) => a.name === 'PLAY' && a.label === 'Info');
